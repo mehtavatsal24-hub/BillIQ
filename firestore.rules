@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.uid == 'XssthfE8PHMi9j3iNMmCYQ9Sqgk2' ||
+        (request.auth.token.email != null && request.auth.token.email.lower() == 'support@billiq.site')
+      );
+    }
+
+    // Default deny for all unmatched paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Strict user-specific isolation: /users/{userId} and nested documents/subcollections
+    // Admin user has full read/write access to all user profiles and files
+    match /users/{userId} {
+      allow get, list, create, update, delete: if isOwner(userId) || isAdmin();
+
+      match /{allPaths=**} {
+        allow get, list, create, update, delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // Anti-Abuse Permanent Trial Ledger: /trialLedgers/{emailKey}
+    // Authenticated users can read/write trial ledgers to check/update quota.
+    // Deletion is strictly restricted to Admin ONLY.
+    match /trialLedgers/{emailKey} {
+      allow get, list, create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // Contacts collection with user isolation
+    match /contacts/{contactId} {
+      allow read, update, delete: if isAuthenticated() && (
+        isAdmin() || resource.data.userId == request.auth.uid
+      );
+      allow create: if isAuthenticated() && (
+        isAdmin() || request.resource.data.userId == request.auth.uid
+      );
+    }
+
+    // Global documents collection with user isolation
+    match /documents/{docId} {
+      allow read, update, delete: if isAuthenticated() && (
+        isAdmin() || resource.data.userId == request.auth.uid
+      );
+      allow create: if isAuthenticated() && (
+        isAdmin() || request.resource.data.userId == request.auth.uid
+      );
+    }
+
+    // Admin security and configuration settings
+    match /admin_config/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Real-time Application Health & Error Logs
+    match /errorLogs/{logId} {
+      allow create, update: if true;
+      allow get, list, delete: if isAdmin() || isAuthenticated();
+    }
+  }
+}

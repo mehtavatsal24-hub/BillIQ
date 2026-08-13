@@ -1,0 +1,628 @@
+import React, { useMemo, useState } from "react";
+import { 
+  TrendingUp, 
+  Users, 
+  Truck, 
+  FileText, 
+  ArrowUpRight, 
+  Clock,
+  Bot,
+  Edit2,
+  Trash2,
+  ExternalLink,
+  Zap,
+  Plus,
+  FileSpreadsheet,
+  AlertTriangle,
+  AlertCircle,
+  CheckCircle2,
+  Calendar,
+  Search,
+  Copy,
+  Check,
+  ShieldAlert,
+  Send,
+  CreditCard,
+  DollarSign
+} from "lucide-react";
+import { Card, CardHeader, CardContent } from "./Card";
+import { Button } from "./Button";
+import { DocumentHistoryItem, PriceHistoryItem, SavedCustomer, SavedSupplier, DocumentType } from "../types";
+import { getCurrencySymbol } from "../utils/localization";
+import { exportHistorySummaryToCSV } from "../utils/csvExport";
+import { calculateDueDate, getDaysUntilDue, parseDateString } from "../utils/dateUtils";
+import { motion, AnimatePresence } from "motion/react";
+
+interface DashboardProps {
+  history: DocumentHistoryItem[];
+  priceHistory: PriceHistoryItem[];
+  customers: SavedCustomer[];
+  suppliers: SavedSupplier[];
+  industry?: string;
+  letterhead?: string;
+  onNavigate: (step: "dashboard" | "invoice" | "customers" | "suppliers" | "profile") => void;
+  onOpenDocument: (doc: DocumentHistoryItem) => void;
+  onDownloadPDF: (doc: DocumentHistoryItem) => void;
+  onDeleteDocument: (timestamp: number) => void;
+  onClearHistory: () => void;
+  onViewAll: () => void;
+  onUpdatePaymentStatus?: (timestamp: number, status: "pending" | "paid" | "overdue" | "due_soon") => void;
+}
+
+const getInvoiceDueDate = (doc: DocumentHistoryItem): { dueDate: Date; isExplicit: boolean } => {
+  const issueDate = parseDateString(doc.date, doc.timestamp);
+  const terms = doc.fullData?.paymentTerms || (doc as any).paymentTerms || "";
+  
+  // Calculate dynamic due date from date + payment terms strictly for Tax Invoices
+  const dueDate = calculateDueDate(issueDate, terms, doc.type);
+  return { dueDate, isExplicit: Boolean(terms) };
+};
+
+export const Dashboard = ({ 
+  history, 
+  customers, 
+  suppliers, 
+  onNavigate, 
+  onOpenDocument, 
+  onDownloadPDF, 
+  onDeleteDocument, 
+  onClearHistory, 
+  onViewAll,
+  onUpdatePaymentStatus
+}: DashboardProps) => {
+  const customerCount = useMemo(() => customers.length, [customers]);
+  const supplierCount = useMemo(() => suppliers.length, [suppliers]);
+  
+  const totalSales = useMemo(() => history
+    .filter(h => h.type === DocumentType.TAX_INVOICE)
+    .reduce((acc, curr) => acc + (curr.inrTotal || curr.total), 0), [history]);
+    
+  const totalPurchases = useMemo(() => history
+    .filter(h => h.type === DocumentType.PURCHASE_ORDER)
+    .reduce((acc, curr) => acc + (curr.inrTotal || curr.total), 0), [history]);
+
+  const recentDocs = useMemo(() => [...history]
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 10), [history]);
+
+  // Process all Tax Invoices for payment & due date scanning
+  const scannedInvoices = useMemo(() => {
+    // Strictly filter for Tax Invoices
+    const taxInvoices = history.filter(
+      (doc) => doc.type === DocumentType.TAX_INVOICE
+    );
+
+    return taxInvoices.map((doc) => {
+      const { dueDate, isExplicit } = getInvoiceDueDate(doc);
+      const daysDiff = getDaysUntilDue(dueDate);
+
+      let status: "paid" | "overdue" | "approaching" | "pending" = "pending";
+      if (doc.paymentStatus === "paid") {
+        status = "paid";
+      } else if (daysDiff < 0) {
+        status = "overdue";
+      } else if (daysDiff <= 7) {
+        status = "approaching";
+      } else {
+        status = "pending";
+      }
+
+      const formattedDueDate = dueDate.toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+
+      const formattedIssueDate = parseDateString(doc.date, doc.timestamp).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+
+      return {
+        ...doc,
+        computedDueDate: dueDate,
+        formattedDueDate,
+        formattedIssueDate,
+        daysDiff,
+        status,
+        isExplicitDueDate: isExplicit,
+      };
+    });
+  }, [history]);
+
+  // Aggregate metrics for payments
+  const paymentMetrics = useMemo(() => {
+    let totalPending = 0;
+    let pendingCount = 0;
+    let totalOverdue = 0;
+    let overdueCount = 0;
+    let totalApproaching = 0;
+    let approachingCount = 0;
+    let totalPaid = 0;
+    let paidCount = 0;
+
+    scannedInvoices.forEach((inv) => {
+      const amount = inv.inrTotal || inv.total;
+      if (inv.status === "paid") {
+        totalPaid += amount;
+        paidCount++;
+      } else {
+        totalPending += amount;
+        pendingCount++;
+        if (inv.status === "overdue") {
+          totalOverdue += amount;
+          overdueCount++;
+        } else if (inv.status === "approaching") {
+          totalApproaching += amount;
+          approachingCount++;
+        }
+      }
+    });
+
+    return {
+      totalPending,
+      pendingCount,
+      totalOverdue,
+      overdueCount,
+      totalApproaching,
+      approachingCount,
+      totalPaid,
+      paidCount,
+    };
+  }, [scannedInvoices]);
+
+  const stats = useMemo(() => [
+    { label: "Total Sales", value: `₹${totalSales.toLocaleString('en-IN')}`, icon: TrendingUp, color: "bg-emerald-500", lightColor: "bg-emerald-50", textColor: "text-emerald-600", action: onViewAll },
+    { label: "Total Purchases", value: `₹${totalPurchases.toLocaleString('en-IN')}`, icon: Truck, color: "bg-amber-500", lightColor: "bg-amber-50", textColor: "text-amber-600", action: onViewAll },
+    { label: "Saved Clients", value: customerCount, icon: Users, color: "bg-indigo-500", lightColor: "bg-indigo-50", textColor: "text-indigo-600", action: () => onNavigate("customers") },
+    { label: "Saved Suppliers", value: supplierCount, icon: Truck, color: "bg-purple-500", lightColor: "bg-purple-50", textColor: "text-purple-600", action: () => onNavigate("suppliers") },
+  ], [totalSales, totalPurchases, customerCount, supplierCount, onViewAll, onNavigate]);
+
+  return (
+    <div className="space-y-8">
+      {/* Top Business Metric Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
+        {stats.map((stat, i) => (
+          <motion.div
+            key={stat.label}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.1 }}
+          >
+            <Card 
+              className={`cursor-pointer group relative overflow-hidden h-full`}
+              onClick={stat.action}
+            >
+              <CardContent className="p-4 sm:p-5 lg:p-6 flex flex-col justify-between h-full">
+                <div className="flex items-center justify-between mb-2 sm:mb-3">
+                  <div className={`w-9 h-9 sm:w-11 sm:h-11 ${stat.lightColor} rounded-xl sm:rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300`}>
+                    <stat.icon className={`${stat.textColor} h-4 w-4 sm:h-5 sm:w-5`} />
+                  </div>
+                  {stat.action && <ArrowUpRight className="h-4 w-4 sm:h-5 sm:w-5 text-zinc-300 group-hover:text-zinc-900 transition-colors" />}
+                </div>
+                <div className="min-w-0 w-full">
+                  <p className="text-[10px] sm:text-xs font-bold text-zinc-500 uppercase tracking-widest mb-1 truncate">{stat.label}</p>
+                  <p 
+                    className={`font-black text-zinc-900 tracking-tight min-w-0 w-full truncate ${
+                      String(stat.value).length > 12
+                        ? "text-base sm:text-lg lg:text-xl"
+                        : String(stat.value).length > 8
+                        ? "text-lg sm:text-xl lg:text-2xl"
+                        : "text-xl sm:text-2xl lg:text-3xl"
+                    }`}
+                    title={String(stat.value)}
+                  >
+                    {stat.value}
+                  </p>
+                </div>
+                
+                {/* Decorative background element */}
+                <div className={`absolute -right-4 -bottom-4 w-20 h-20 ${stat.lightColor} opacity-20 rounded-full group-hover:scale-150 transition-transform duration-500 pointer-events-none`} />
+              </CardContent>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Compact Metrics Summary Box Grid */}
+      <motion.div
+        initial={{ opacity: 0, y: 15 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+        className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6"
+      >
+        {/* Total Unpaid Box */}
+        <Card 
+          className="border border-indigo-100 bg-gradient-to-br from-indigo-50/50 to-white shadow-xs overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
+          onClick={onViewAll}
+        >
+          <CardContent className="p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+                <CreditCard className="h-5 w-5" />
+              </div>
+              <span className="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-indigo-100/80 text-indigo-800">
+                {paymentMetrics.pendingCount} Unpaid
+              </span>
+            </div>
+            <div>
+              <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Total Unpaid</p>
+              <p className="text-2xl sm:text-3xl font-black text-zinc-900 tracking-tight">
+                ₹{paymentMetrics.totalPending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Overdue Amount Box */}
+        <Card 
+          className="border border-rose-100 bg-gradient-to-br from-rose-50/50 to-white shadow-xs overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
+          onClick={onViewAll}
+        >
+          <CardContent className="p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <span className="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-rose-100/80 text-rose-800">
+                {paymentMetrics.overdueCount} Overdue
+              </span>
+            </div>
+            <div>
+              <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Overdue Amount</p>
+              <p className="text-2xl sm:text-3xl font-black text-rose-700 tracking-tight">
+                ₹{paymentMetrics.totalOverdue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Due Soon Amount Box */}
+        <Card 
+          className="border border-amber-100 bg-gradient-to-br from-amber-50/50 to-white shadow-xs overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
+          onClick={onViewAll}
+        >
+          <CardContent className="p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                <Clock className="h-5 w-5" />
+              </div>
+              <span className="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-amber-100/80 text-amber-900">
+                {paymentMetrics.approachingCount} Due Soon (≤7d)
+              </span>
+            </div>
+            <div>
+              <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Due Soon Amount</p>
+              <p className="text-2xl sm:text-3xl font-black text-amber-800 tracking-tight">
+                ₹{paymentMetrics.totalApproaching.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <motion.div 
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.4 }}
+          className="lg:col-span-2"
+        >
+          <Card className="h-full">
+            <CardHeader 
+              title="Recent Documents" 
+              subtitle="Your latest invoices and orders"
+              action={
+                <div className="flex items-center gap-2">
+                  {history.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => exportHistorySummaryToCSV(history)}
+                      className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 font-bold"
+                      title="Export invoice history as CSV"
+                    >
+                      <FileSpreadsheet className="h-4 w-4 mr-1.5" />
+                      Export CSV
+                    </Button>
+                  )}
+                  {history.length > 5 && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={onViewAll}
+                      className="text-brand-600 hover:text-brand-700 font-bold"
+                    >
+                      View All
+                      <ArrowUpRight className="h-4 w-4 ml-1" />
+                    </Button>
+                  )}
+                  {history.length > 0 && (
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={onClearHistory}
+                      className="text-zinc-400 hover:text-red-500 font-bold"
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              }
+            />
+            <CardContent className="p-0">
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-zinc-100 bg-zinc-50/50">
+                      <th className="px-8 py-4 text-xs font-bold text-zinc-400 uppercase tracking-widest">Document</th>
+                      <th className="px-8 py-4 text-xs font-bold text-zinc-400 uppercase tracking-widest">Party</th>
+                      <th className="px-8 py-4 text-xs font-bold text-zinc-400 uppercase tracking-widest whitespace-nowrap min-w-[120px]">Date</th>
+                      <th className="px-8 py-4 text-xs font-bold text-zinc-400 uppercase tracking-widest text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-50">
+                    {recentDocs.length > 0 ? (
+                      recentDocs.map((doc, index) => (
+                        <tr 
+                          key={`${doc.id || 'doc'}-${doc.timestamp || ''}-${index}`} 
+                          className="hover:bg-brand-50/30 transition-colors cursor-pointer group"
+                          onClick={() => onDownloadPDF(doc)}
+                        >
+                          <td className="px-8 py-5 align-middle">
+                            <div className="flex items-center gap-4">
+                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${doc.type === "Purchase Order" ? "bg-orange-100 text-orange-600" : "bg-emerald-100 text-emerald-600"}`}>
+                                <FileText className="h-5 w-5" />
+                              </div>
+                              <div>
+                                <p className="text-sm font-extrabold text-zinc-900 group-hover:text-brand-600 transition-colors">{doc.id}</p>
+                                <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">{doc.type}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-8 py-5 align-middle">
+                            <p className="text-sm font-semibold text-zinc-600">{doc.customerName}</p>
+                          </td>
+                          <td className="px-8 py-5 align-middle whitespace-nowrap min-w-[120px]">
+                            <p className="text-sm font-medium text-zinc-500 whitespace-nowrap">{doc.date}</p>
+                          </td>
+                          <td className="px-8 py-5 text-right align-middle">
+                            <div className="flex items-center justify-end gap-3">
+                              <p className="text-sm font-black text-zinc-900">
+                                {getCurrencySymbol(doc.currency || 'INR')}
+                                {doc.total.toLocaleString(doc.currency === 'INR' || !doc.currency ? 'en-IN' : 'en-US', { minimumFractionDigits: 2 })}
+                              </p>
+                              <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDownloadPDF(doc);
+                                  }}
+                                  className="h-8 w-8"
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                </Button>
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onOpenDocument(doc);
+                                  }}
+                                  className="h-8 w-8 text-brand-600"
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                </Button>
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteDocument(doc.timestamp);
+                                  }}
+                                  className="h-8 w-8 text-red-500 hover:bg-red-50"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="px-8 py-20 text-center">
+                          <div className="flex flex-col items-center gap-4 text-zinc-400">
+                            <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center">
+                              <Clock className="h-8 w-8 opacity-20" />
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-base font-bold text-zinc-900">No documents yet</p>
+                              <p className="text-sm">Start by creating your first invoice or order.</p>
+                            </div>
+                            <Button variant="primary" size="sm" onClick={() => onNavigate("invoice")} className="mt-2">
+                              Create New Bill
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile Card List */}
+              <div className="md:hidden divide-y divide-zinc-100">
+                {recentDocs.length > 0 ? (
+                  recentDocs.map((doc, idx) => (
+                    <div 
+                      key={`${doc.id || 'doc'}-${doc.timestamp || ''}-${idx}`}
+                      className="p-4 active:bg-zinc-50 transition-colors"
+                      onClick={() => onOpenDocument(doc)}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${doc.type === "Purchase Order" ? "bg-orange-100 text-orange-600" : "bg-emerald-100 text-emerald-600"}`}>
+                            <FileText className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-extrabold text-zinc-900">{doc.id}</p>
+                            <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">{doc.type}</p>
+                          </div>
+                        </div>
+                        <p className="text-sm font-black text-zinc-900">
+                          {getCurrencySymbol(doc.currency || 'INR')}
+                          {doc.total.toLocaleString(doc.currency === 'INR' || !doc.currency ? 'en-IN' : 'en-US')}
+                        </p>
+                      </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <p className="text-sm font-semibold text-zinc-600">{doc.customerName}</p>
+                          <p className="text-xs text-zinc-400">{doc.date}</p>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button 
+                            variant="ghost" 
+                            size="icon"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDownloadPDF(doc);
+                            }}
+                            className="h-9 w-9"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="icon"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenDocument(doc);
+                            }}
+                            className="h-9 w-9 text-brand-600"
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="icon"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteDocument(doc.timestamp);
+                            }}
+                            className="h-9 w-9 text-red-500"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="px-4 py-12 text-center">
+                    <p className="text-sm text-zinc-400 font-bold">No documents yet</p>
+                    <Button variant="primary" size="sm" onClick={() => onNavigate("invoice")} className="mt-4 w-full">
+                      Create New Bill
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <motion.div 
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.5 }}
+          className="space-y-8"
+        >
+          <Card>
+            <CardHeader title="Quick Actions" />
+            <CardContent className="space-y-4">
+              <Button 
+                onClick={() => onNavigate("invoice")}
+                className="w-full justify-between h-16 text-lg"
+              >
+                <div className="flex items-center gap-4">
+                  <Zap className="h-6 w-6 fill-white" />
+                  <span>New Invoice</span>
+                </div>
+                <ArrowUpRight className="h-5 w-5" />
+              </Button>
+              
+              <Button 
+                variant="outline"
+                onClick={() => onNavigate("customers")}
+                className="w-full justify-between h-14"
+              >
+                <div className="flex items-center gap-4">
+                  <Users className="h-5 w-5 text-zinc-500" />
+                  <span className="font-bold">Add Customer</span>
+                </div>
+                <Plus className="h-4 w-4" />
+              </Button>
+
+              <Button 
+                variant="outline"
+                onClick={() => onNavigate("suppliers")}
+                className="w-full justify-between h-14"
+              >
+                <div className="flex items-center gap-4">
+                  <Truck className="h-5 w-5 text-zinc-500" />
+                  <span className="font-bold">Add Supplier</span>
+                </div>
+                <Plus className="h-4 w-4" />
+              </Button>
+
+              <Button 
+                variant="outline"
+                disabled={history.length === 0}
+                onClick={() => exportHistorySummaryToCSV(history)}
+                className="w-full justify-between h-14 border-emerald-200 hover:bg-emerald-50 text-emerald-900"
+              >
+                <div className="flex items-center gap-4">
+                  <FileSpreadsheet className="h-5 w-5 text-emerald-600" />
+                  <span className="font-bold">Export History (CSV)</span>
+                </div>
+                <FileSpreadsheet className="h-4 w-4 text-emerald-500" />
+              </Button>
+              
+              <div className="pt-4 border-t border-zinc-100">
+                <Card className="bg-brand-50 border-brand-100 shadow-none">
+                  <CardContent className="p-6">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
+                        <Bot className="text-white h-5 w-5" />
+                      </div>
+                      <p className="font-extrabold text-brand-900">AI Assistant</p>
+                    </div>
+                    <p className="text-xs text-brand-700 font-medium leading-relaxed mb-4">
+                      Need help analyzing a bill or generating unique notes? Just ask!
+                    </p>
+                    <Button 
+                      variant="primary" 
+                      size="sm" 
+                      className="w-full bg-brand-900 hover:bg-black"
+                      onClick={() => {
+                        const btn = document.querySelector('.ai-chat-toggle') as HTMLButtonElement;
+                        if (btn) btn.click();
+                      }}
+                    >
+                      Open Chat
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+    </div>
+  );
+};

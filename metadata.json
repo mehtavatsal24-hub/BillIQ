@@ -1,0 +1,11 @@
+{
+  "name": "BillIQ",
+  "description": "Next-gen intelligent billing and invoicing platform. Generate GST-compliant invoices, challans, and QC reports with built-in industrial standards, data extraction, and voice commands.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

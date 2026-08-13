@@ -1,0 +1,44 @@
+[
+  {
+    "id": "usr_admin",
+    "username": "admin",
+    "email": "admin@smartbill.ai",
+    "createdAt": "2026-08-11T09:10:27.751Z",
+    "lastSeen": null,
+    "isOnline": false,
+    "lastActive": "2026-08-11T09:27:15.767Z",
+    "updatedAt": "2026-08-11T09:27:15.767Z"
+  },
+  {
+    "id": "usr_demo",
+    "username": "demouser",
+    "email": "demo@smartbill.ai",
+    "createdAt": "2026-08-11T09:10:27.751Z"
+  },
+  {
+    "id": "usr_john",
+    "username": "johndoe",
+    "email": "john@example.com",
+    "createdAt": "2026-08-11T09:10:27.751Z"
+  },
+  {
+    "id": "XssthfE8PHMi9j3iNMmCYQ9Sqgk2",
+    "username": "Vatsal Mehta",
+    "email": "mehtavatsal24@gmail.com",
+    "createdAt": "2026-08-11T09:10:33.539Z",
+    "updatedAt": "2026-08-13T07:52:20.619Z",
+    "lastActive": "2026-08-13T07:52:20.619Z",
+    "lastSeen": null,
+    "isOnline": false
+  },
+  {
+    "id": "BzfnRqFFUtVeoqjxcLolmu6SRIA3",
+    "username": "BillIQ",
+    "email": "support@billiq.site",
+    "createdAt": "2026-08-11T09:27:15.829Z",
+    "updatedAt": "2026-08-13T08:00:51.147Z",
+    "lastActive": "2026-08-13T08:00:51.147Z",
+    "lastSeen": "2026-08-13T08:00:51.147Z",
+    "isOnline": true
+  }
+]
