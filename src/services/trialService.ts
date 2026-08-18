@@ -1,4 +1,4 @@
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { db } from "./firebase";
 import { handleFirestoreError, OperationType } from "./dbService";
 
@@ -151,11 +151,11 @@ export function getOrCreateTrialLedger(email: string, userId: string): Promise<{
       const ledgerSnap = await getDoc(ledgerRef);
 
       if (!ledgerSnap.exists()) {
-        // First time EVER for this email address!
+        // First time EVER for this email address! Strictly grant 5 free documents
         const now = new Date().toISOString();
-        const initialCount = localCount;
-        const initialRemaining = Math.max(0, 5 - initialCount);
-        const isExhausted = initialRemaining <= 0;
+        const initialCount = 0;
+        const initialRemaining = 5;
+        const isExhausted = false;
         const newLedger: TrialLedgerData = {
           email: cleanEmail,
           trialUsed: true,
@@ -164,8 +164,8 @@ export function getOrCreateTrialLedger(email: string, userId: string): Promise<{
           documentsUsed: initialCount,
           lifetimeCreatedCount: initialCount,
           totalGeneratedDocsCount: initialCount,
-          planTier: isExhausted ? "expired" : "free-trial",
-          planName: isExhausted ? "Trial Expired" : "Free Trial",
+          planTier: "free-trial",
+          planName: "Free Trial",
           firstCreatedUid: userId,
           isReRegisteredUser: false,
           createdAt: now,
@@ -181,8 +181,8 @@ export function getOrCreateTrialLedger(email: string, userId: string): Promise<{
           documentsRemaining: initialRemaining,
           documentsUsed: initialCount,
           lifetimeCreatedCount: initialCount,
-          planTier: isExhausted ? "expired" : "free-trial",
-          planName: isExhausted ? "Trial Expired" : "Free Trial",
+          planTier: "free-trial",
+          planName: "Free Trial",
           isReRegisteredUser: false,
         };
       } else {
@@ -430,7 +430,7 @@ export async function consumeUserDocumentCredit(
 
     const newLifetime = currentUsed + 1;
     const newRemaining = Math.max(0, currentRemaining - 1);
-    const isExhausted = newRemaining <= 0 || newLifetime >= 5;
+    const isExhausted = newRemaining <= 0;
     const newTier = isExhausted ? "expired" : "free-trial";
     const newPlanName = isExhausted ? "Trial Expired" : "Free Trial";
 
@@ -473,6 +473,26 @@ export async function consumeUserDocumentCredit(
     console.warn("Notice consuming document credit:", error);
     const count = getLocalUserDocCount(userId);
     return { remaining: Math.max(0, 5 - count), exhausted: count >= 5, lifetimeCreatedCount: count };
+  }
+}
+
+/**
+ * Deletes the trial ledger entry for an email address from Firestore
+ * so that when the user signs up again, they start completely fresh as a new user.
+ */
+export async function deleteTrialLedger(email: string): Promise<boolean> {
+  const cleanEmail = (email || "").trim().toLowerCase();
+  if (!cleanEmail || !db) return false;
+
+  const emailKey = getEmailKey(cleanEmail);
+  const ledgerRef = doc(db, "trialLedgers", emailKey);
+
+  try {
+    await deleteDoc(ledgerRef);
+    return true;
+  } catch (error) {
+    console.warn(`Notice deleting trial ledger for ${emailKey}:`, error);
+    return false;
   }
 }
 

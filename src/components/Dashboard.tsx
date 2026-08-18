@@ -100,12 +100,16 @@ export const Dashboard = ({
   onViewAll,
   onUpdatePaymentStatus
 }: DashboardProps) => {
-  const activeCurrency = (currency || "INR").trim().toUpperCase();
+  const rawCurrency = (currency || "INR").trim().toUpperCase();
+  const activeCurrency = !rawCurrency || rawCurrency === "AOA" || rawCurrency === "AO" || rawCurrency === "KZ" || rawCurrency === "KZ." || rawCurrency === "ANGOLA" ? "INR" : rawCurrency;
   const customerCount = useMemo(() => customers.length, [customers]);
   const supplierCount = useMemo(() => suppliers.length, [suppliers]);
   
   const getDocAmountInActiveCurrency = (doc: DocumentHistoryItem) => {
-    const docCurrency = (doc.currency || "INR").trim().toUpperCase();
+    let docCurrency = (doc.currency || "INR").trim().toUpperCase();
+    if (docCurrency === "AOA" || docCurrency === "AO" || docCurrency === "KZ" || docCurrency === "KZ." || docCurrency === "ANGOLA") {
+      docCurrency = "INR";
+    }
     if (docCurrency === activeCurrency) {
       return Number(doc.total || doc.totalAmount || 0);
     }

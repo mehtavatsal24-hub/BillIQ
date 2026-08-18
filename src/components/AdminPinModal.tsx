@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Shield, Lock, Key, Eye, EyeOff, Mail, CheckCircle2, AlertCircle, ArrowLeft, Send, Sparkles } from "lucide-react";
+import { Shield, Lock, Key, Eye, EyeOff, Mail, CheckCircle2, AlertCircle, ArrowLeft, Send, Sparkles, Clock, AlertTriangle } from "lucide-react";
 import { saveToCloud } from "../services/dbService";
 
 interface AdminPinModalProps {
@@ -11,6 +11,8 @@ interface AdminPinModalProps {
 
 export const ADMIN_DEFAULT_PIN = "1224";
 export const ADMIN_RESET_EMAIL = "mehtavatsal24@gmail.com";
+
+const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
 export const AdminPinModal: React.FC<AdminPinModalProps> = ({
   isOpen,
@@ -25,7 +27,40 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
   const [isResetView, setIsResetView] = useState<boolean>(false);
   const [isSendingReset, setIsSendingReset] = useState<boolean>(false);
   const [resetSentSuccess, setResetSentSuccess] = useState<boolean>(false);
+  const [failedAttempts, setFailedAttempts] = useState<number>(() => {
+    try {
+      const stored = sessionStorage.getItem("billiq_admin_failed_attempts") || localStorage.getItem("billiq_admin_failed_attempts");
+      return stored ? parseInt(stored, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [lockoutUntil, setLockoutUntil] = useState<number>(() => {
+    try {
+      const stored = sessionStorage.getItem("billiq_admin_lockout_until") || localStorage.getItem("billiq_admin_lockout_until");
+      return stored ? parseInt(stored, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [remainingLockSeconds, setRemainingLockSeconds] = useState<number>(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Check lockout timer
+  useEffect(() => {
+    const updateTimer = () => {
+      const now = Date.now();
+      if (lockoutUntil > now) {
+        setRemainingLockSeconds(Math.ceil((lockoutUntil - now) / 1000));
+      } else {
+        setRemainingLockSeconds(0);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [lockoutUntil]);
 
   useEffect(() => {
     if (isOpen) {
@@ -34,15 +69,79 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
       setIsResetView(false);
       setResetSentSuccess(false);
       setTimeout(() => {
-        inputRef.current?.focus();
+        if (lockoutUntil <= Date.now()) {
+          inputRef.current?.focus();
+        }
       }, 100);
     }
-  }, [isOpen]);
+  }, [isOpen, lockoutUntil]);
+
+  const dispatchSecurityAlert = async (attemptsCount: number) => {
+    try {
+      await fetch("/api/admin/security-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          attemptedEmail: userEmail || "mehtavatsal24@gmail.com",
+          attemptsCount,
+          timestamp: new Date().toISOString(),
+          userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "Browser",
+          lockDurationMinutes: 5,
+        }),
+      });
+    } catch (err) {
+      console.warn("Security alert dispatch notice:", err);
+    }
+  };
+
+  const handleIncorrectPin = (currentAttempts: number) => {
+    const newCount = currentAttempts + 1;
+    setFailedAttempts(newCount);
+    try {
+      sessionStorage.setItem("billiq_admin_failed_attempts", String(newCount));
+      localStorage.setItem("billiq_admin_failed_attempts", String(newCount));
+    } catch {}
+
+    if (newCount >= 3) {
+      const lockTime = Date.now() + LOCKOUT_DURATION_MS;
+      setLockoutUntil(lockTime);
+      try {
+        sessionStorage.setItem("billiq_admin_lockout_until", String(lockTime));
+        localStorage.setItem("billiq_admin_lockout_until", String(lockTime));
+      } catch {}
+
+      // Trigger high-priority alert email to founder
+      dispatchSecurityAlert(newCount);
+      setErrorMsg("Security alert triggered: 3 failed attempts recorded. Alert sent to mehtavatsal24@gmail.com. Input locked for 5 minutes.");
+    } else {
+      setErrorMsg(`Incorrect PIN. Please try again. (${3 - newCount} attempt${3 - newCount === 1 ? "" : "s"} remaining before temporary lockout)`);
+    }
+
+    setIsShaking(true);
+    setTimeout(() => setIsShaking(false), 500);
+    setPin("");
+  };
+
+  const handleCorrectPin = () => {
+    setFailedAttempts(0);
+    setLockoutUntil(0);
+    try {
+      sessionStorage.removeItem("billiq_admin_failed_attempts");
+      localStorage.removeItem("billiq_admin_failed_attempts");
+      sessionStorage.removeItem("billiq_admin_lockout_until");
+      localStorage.removeItem("billiq_admin_lockout_until");
+      sessionStorage.setItem("billiq_admin_pin_verified", "true");
+    } catch {}
+    onSuccess();
+  };
 
   if (!isOpen) return null;
 
+  const isLockedOut = remainingLockSeconds > 0;
+
   const handlePinSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (isLockedOut) return;
     setErrorMsg("");
 
     const storedPin = localStorage.getItem("admin_panel_pin") || localStorage.getItem("admin_security_password") || ADMIN_DEFAULT_PIN;
@@ -55,19 +154,15 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
       return;
     }
 
-    // Accept default PIN 1224 or stored custom PIN
     if (cleanEntered === ADMIN_DEFAULT_PIN || cleanEntered === storedPin) {
-      onSuccess();
+      handleCorrectPin();
     } else {
-      setErrorMsg("Incorrect Admin PIN. Please enter the valid administrator PIN (1224).");
-      setIsShaking(true);
-      setTimeout(() => setIsShaking(false), 500);
-      setPin("");
-      inputRef.current?.focus();
+      handleIncorrectPin(failedAttempts);
     }
   };
 
   const handleDigitClick = (digit: string) => {
+    if (isLockedOut) return;
     if (pin.length < 8) {
       const newPin = pin + digit;
       setPin(newPin);
@@ -75,16 +170,14 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
       if (newPin.length === 4) {
         const storedPin = localStorage.getItem("admin_panel_pin") || localStorage.getItem("admin_security_password") || ADMIN_DEFAULT_PIN;
         if (newPin === ADMIN_DEFAULT_PIN || newPin === storedPin) {
-          try {
-            sessionStorage.setItem("billiq_admin_pin_verified", "true");
-          } catch (err) {}
-          onSuccess();
+          handleCorrectPin();
         }
       }
     }
   };
 
   const handleBackspace = () => {
+    if (isLockedOut) return;
     setPin((prev) => prev.slice(0, -1));
     setErrorMsg("");
   };
@@ -100,7 +193,6 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
           requestedAt: new Date().toISOString(),
           requestedBy: userEmail || "admin",
           targetResetEmail: ADMIN_RESET_EMAIL,
-          defaultPin: ADMIN_DEFAULT_PIN,
           status: "pending_review",
         }, true);
       } catch (cloudErr) {
@@ -110,7 +202,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
       // Open mailto link directed to mehtavatsal24@gmail.com
       const mailtoSubject = encodeURIComponent("BillIQ Admin PIN Reset Request");
       const mailtoBody = encodeURIComponent(
-        `Hello,\n\nA password reset request was initiated for the BillIQ Admin Panel.\n\nAccount: ${userEmail || "Administrator"}\nTimestamp: ${new Date().toLocaleString()}\nDefault System PIN: ${ADMIN_DEFAULT_PIN}\n\nPlease verify and reset the administrative security credentials accordingly.`
+        `Hello,\n\nA password reset request was initiated for the BillIQ Admin Panel.\n\nAccount: ${userEmail || "Administrator"}\nTimestamp: ${new Date().toLocaleString()}\n\nPlease verify and reset the administrative security credentials accordingly.`
       );
       
       const mailtoUrl = `mailto:${ADMIN_RESET_EMAIL}?subject=${mailtoSubject}&body=${mailtoBody}`;
@@ -133,6 +225,12 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
     }
   };
 
+  const formatLockTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/80 backdrop-blur-md animate-fadeIn">
       <div 
@@ -142,16 +240,41 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
       >
         {/* Header Icon & Title */}
         <div className="text-center space-y-2 mb-6">
-          <div className="w-16 h-16 bg-gradient-to-tr from-indigo-600 to-indigo-500 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-indigo-500/25 border border-indigo-400/30">
-            <Shield className="w-8 h-8 text-white" />
+          <div className={`w-16 h-16 rounded-2xl mx-auto flex items-center justify-center shadow-lg border transition-all ${
+            isLockedOut 
+              ? "bg-red-950/80 border-red-800 text-red-400 shadow-red-900/40" 
+              : "bg-gradient-to-tr from-indigo-600 to-indigo-500 border-indigo-400/30 text-white shadow-indigo-500/25"
+          }`}>
+            {isLockedOut ? <Lock className="w-8 h-8 text-red-400 animate-pulse" /> : <Shield className="w-8 h-8 text-white" />}
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white tracking-tight">Admin Console Verification</h2>
+            <h2 className="text-xl font-bold text-white tracking-tight">
+              {isLockedOut ? "Console Temporarily Locked" : "Admin Console Verification"}
+            </h2>
             <p className="text-xs text-zinc-400 mt-1">
-              Enter your administrator security PIN to unlock the management console.
+              {isLockedOut 
+                ? "Security lockout active. Multiple incorrect attempts were detected." 
+                : "Enter your administrator security PIN to unlock the management console."}
             </p>
           </div>
         </div>
+
+        {/* Lockout Warning Banner */}
+        {isLockedOut && (
+          <div className="p-4 bg-red-950/50 border border-red-800/80 rounded-2xl text-red-200 mb-5 space-y-2">
+            <div className="flex items-center gap-2 font-bold text-xs text-red-400 uppercase tracking-wider">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>Lockout Active</span>
+            </div>
+            <p className="text-xs text-zinc-300 leading-relaxed">
+              Too many consecutive failed attempts. An automated security alert was dispatched to <strong className="text-white">mehtavatsal24@gmail.com</strong>.
+            </p>
+            <div className="flex items-center justify-center gap-2 p-2.5 bg-zinc-950/90 rounded-xl border border-zinc-800 text-amber-400 font-mono text-sm font-bold">
+              <Clock className="w-4 h-4 animate-spin text-amber-400" />
+              <span>Cooldown: {formatLockTime(remainingLockSeconds)}</span>
+            </div>
+          </div>
+        )}
 
         {!isResetView ? (
           /* PIN Input View */
@@ -163,20 +286,22 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
                   ref={inputRef}
                   type={showPin ? "text" : "password"}
                   value={pin}
+                  disabled={isLockedOut}
                   onChange={(e) => {
                     const val = e.target.value.replace(/[^0-9]/g, "").slice(0, 8);
                     setPin(val);
                     setErrorMsg("");
                   }}
-                  placeholder="Enter PIN (e.g. 1224)"
+                  placeholder="Enter 4-digit PIN"
                   maxLength={8}
-                  className="w-full text-center text-2xl tracking-[0.3em] font-mono font-bold bg-zinc-950/80 border border-zinc-700/80 rounded-2xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all placeholder:text-zinc-600 placeholder:text-sm placeholder:tracking-normal"
+                  className="w-full text-center text-2xl tracking-[0.3em] font-mono font-bold bg-zinc-950/80 border border-zinc-700/80 rounded-2xl py-3 px-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all placeholder:text-zinc-600 placeholder:text-sm placeholder:tracking-normal disabled:opacity-40 disabled:cursor-not-allowed"
                   autoFocus
                 />
                 <button
                   type="button"
+                  disabled={isLockedOut}
                   onClick={() => setShowPin(!showPin)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 p-1 rounded-lg transition-colors cursor-pointer"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 p-1 rounded-lg transition-colors cursor-pointer disabled:opacity-40"
                   title={showPin ? "Hide PIN" : "Show PIN"}
                 >
                   {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -199,7 +324,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
             </div>
 
             {/* Error Message */}
-            {errorMsg && (
+            {errorMsg && !isLockedOut && (
               <div className="p-3 bg-red-950/40 border border-red-800/80 rounded-xl text-red-300 text-xs font-semibold flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
                 <span>{errorMsg}</span>
@@ -212,30 +337,34 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
                 <button
                   key={num}
                   type="button"
+                  disabled={isLockedOut}
                   onClick={() => handleDigitClick(num)}
-                  className="h-11 rounded-xl bg-zinc-800/80 hover:bg-zinc-700/80 text-white font-semibold text-lg transition-all active:scale-95 border border-zinc-700/50 cursor-pointer shadow-xs"
+                  className="h-11 rounded-xl bg-zinc-800/80 hover:bg-zinc-700/80 text-white font-semibold text-lg transition-all active:scale-95 border border-zinc-700/50 cursor-pointer shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {num}
                 </button>
               ))}
               <button
                 type="button"
+                disabled={isLockedOut}
                 onClick={() => setPin("")}
-                className="h-11 rounded-xl bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs font-bold transition-all border border-zinc-700/30 cursor-pointer"
+                className="h-11 rounded-xl bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs font-bold transition-all border border-zinc-700/30 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Clear
               </button>
               <button
                 type="button"
+                disabled={isLockedOut}
                 onClick={() => handleDigitClick("0")}
-                className="h-11 rounded-xl bg-zinc-800/80 hover:bg-zinc-700/80 text-white font-semibold text-lg transition-all active:scale-95 border border-zinc-700/50 cursor-pointer shadow-xs"
+                className="h-11 rounded-xl bg-zinc-800/80 hover:bg-zinc-700/80 text-white font-semibold text-lg transition-all active:scale-95 border border-zinc-700/50 cursor-pointer shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 0
               </button>
               <button
                 type="button"
+                disabled={isLockedOut}
                 onClick={handleBackspace}
-                className="h-11 rounded-xl bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs font-bold transition-all border border-zinc-700/30 cursor-pointer"
+                className="h-11 rounded-xl bg-zinc-800/50 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs font-bold transition-all border border-zinc-700/30 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 ⌫
               </button>
@@ -245,7 +374,8 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
             <div className="space-y-2 pt-2">
               <button
                 type="submit"
-                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/30 cursor-pointer flex items-center justify-center gap-2"
+                disabled={isLockedOut}
+                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/30 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Key className="w-4 h-4" />
                 <span>Unlock Admin Console</span>
@@ -329,7 +459,11 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
                   setIsResetView(false);
                   setResetSentSuccess(false);
                   setErrorMsg("");
-                  setTimeout(() => inputRef.current?.focus(), 100);
+                  setTimeout(() => {
+                    if (lockoutUntil <= Date.now()) {
+                      inputRef.current?.focus();
+                    }
+                  }, 100);
                 }}
                 className="w-full py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-xl text-xs font-bold transition-all border border-zinc-700 cursor-pointer flex items-center justify-center gap-2"
               >
@@ -343,3 +477,4 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
     </div>
   );
 };
+

@@ -3,6 +3,8 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
+import { Analytics } from '@vercel/analytics/react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 
 // Intercept console.warn and console.error to suppress benign warnings and handle errors cleanly
 const originalWarn = console.warn;
@@ -49,6 +51,8 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
       <App />
+      <Analytics />
+      <SpeedInsights />
     </ErrorBoundary>
   </StrictMode>,
 );

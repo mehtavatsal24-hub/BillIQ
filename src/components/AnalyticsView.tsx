@@ -84,8 +84,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   onNavigate,
   onNewBill
 }) => {
-  const activeCurrency = (currency || "INR").trim().toUpperCase();
-  const currencySymbol = getCurrencySymbol(activeCurrency);
+  const rawCurrency = (currency || "INR").trim().toUpperCase();
+  const activeCurrency = !rawCurrency || rawCurrency === "AOA" || rawCurrency === "AO" || rawCurrency === "KZ" || rawCurrency === "KZ." || rawCurrency === "ANGOLA" ? "INR" : rawCurrency;
+  const rawSymbol = getCurrencySymbol(activeCurrency);
+  const currencySymbol = !rawSymbol || rawSymbol === "Kz" || activeCurrency === "INR" ? "₹" : rawSymbol;
 
   // Filters State
   const [dateRange, setDateRange] = useState<DateRangeFilter>("30d");
@@ -97,7 +99,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   // Helper to normalize document amount in active currency
   const getDocAmountInActiveCurrency = (doc: DocumentHistoryItem): number => {
-    const docCurrency = (doc.currency || "INR").trim().toUpperCase();
+    let docCurrency = (doc.currency || "INR").trim().toUpperCase();
+    if (docCurrency === "AOA" || docCurrency === "AO" || docCurrency === "KZ" || docCurrency === "KZ." || docCurrency === "ANGOLA") {
+      docCurrency = "INR";
+    }
     if (docCurrency === activeCurrency) {
       return Number(doc.total || doc.totalAmount || 0);
     }

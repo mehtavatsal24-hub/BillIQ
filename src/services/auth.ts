@@ -471,7 +471,8 @@ export const syncUserProfileToFirestore = async (
 
       const trialInfo = await getOrCreateTrialLedger(resolvedEmail, user.uid);
       const isPaid = existingData.planTier === "pro" || existingData.planTier === "enterprise";
-      const isExhausted = existingData.trialExhausted === true || trialInfo.trialExhausted === true || (!isPaid && existingData.documentsRemaining <= 0);
+      const remainingDocs = existingData.documentsRemaining !== undefined ? existingData.documentsRemaining : trialInfo.documentsRemaining;
+      const isExhausted = !isPaid && remainingDocs <= 0;
 
       const profileData: Record<string, any> = {
         id: user.uid,
@@ -481,6 +482,7 @@ export const syncUserProfileToFirestore = async (
         authEmail: authEmail || resolvedEmail,
         username: username || resolvedDisplayName,
         authUsername: username || resolvedDisplayName,
+        documentsRemaining: isPaid ? 999999 : (isExhausted ? 0 : remainingDocs),
         trialExhausted: isPaid ? false : isExhausted,
         lastLoginAt: serverTimestamp(),
         updatedAt: new Date().toISOString()
@@ -498,6 +500,10 @@ export const syncUserProfileToFirestore = async (
         profileData.planTier = "expired";
         profileData.planName = "Trial Expired";
         profileData.plan = "Trial Expired";
+      } else if (!isPaid) {
+        profileData.planTier = existingData.planTier && existingData.planTier !== "expired" ? existingData.planTier : "free-trial";
+        profileData.planName = existingData.planName && existingData.planName !== "Trial Expired" ? existingData.planName : "Free Trial";
+        profileData.plan = existingData.plan && existingData.plan !== "Trial Expired" ? existingData.plan : "Free Trial";
       }
 
       // Preserve existing role and status properties

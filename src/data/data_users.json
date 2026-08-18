@@ -1,35 +1,16 @@
 [
   {
-    "id": "usr_admin",
-    "username": "admin",
-    "email": "admin@smartbill.ai",
-    "createdAt": "2026-08-11T09:10:27.751Z",
-    "lastSeen": null,
-    "isOnline": false,
-    "lastActive": "2026-08-11T09:27:15.767Z",
-    "updatedAt": "2026-08-11T09:27:15.767Z"
-  },
-  {
-    "id": "usr_demo",
-    "username": "demouser",
-    "email": "demo@smartbill.ai",
-    "createdAt": "2026-08-11T09:10:27.751Z"
-  },
-  {
-    "id": "usr_john",
-    "username": "johndoe",
-    "email": "john@example.com",
-    "createdAt": "2026-08-11T09:10:27.751Z"
-  },
-  {
     "id": "XssthfE8PHMi9j3iNMmCYQ9Sqgk2",
     "username": "Founder",
     "email": "mehtavatsal24@gmail.com",
     "createdAt": "2026-08-11T09:10:33.539Z",
-    "updatedAt": "2026-08-15T14:04:26.580Z",
-    "lastActive": "2026-08-15T14:04:26.580Z",
-    "lastSeen": "2026-08-15T14:04:26.580Z",
-    "isOnline": true
+    "updatedAt": "2026-08-18T16:08:25.633Z",
+    "lastActive": "2026-08-18T16:08:25.633Z",
+    "lastSeen": "2026-08-18T16:08:25.633Z",
+    "isOnline": true,
+    "lastActiveAt": "2026-08-18T16:08:25.633Z",
+    "hasReceivedInactivityReminder": true,
+    "lastInactivityReminderSentAt": "2026-08-18T15:34:04.142Z"
   },
   {
     "id": "BzfnRqFFUtVeoqjxcLolmu6SRIA3",
@@ -40,5 +21,16 @@
     "lastActive": "2026-08-13T08:00:51.147Z",
     "lastSeen": "2026-08-13T08:00:51.147Z",
     "isOnline": true
+  },
+  {
+    "id": "3evoRRD9q2a0yqMDehvdoIkLovt1",
+    "username": "Urban Aura",
+    "email": "urbanauraofficial.in@gmail.com",
+    "createdAt": "2026-08-18T15:57:40.454Z",
+    "updatedAt": "2026-08-18T15:57:54.594Z",
+    "lastActive": "2026-08-18T15:57:54.594Z",
+    "lastActiveAt": "2026-08-18T15:57:54.594Z",
+    "lastSeen": null,
+    "isOnline": false
   }
 ]

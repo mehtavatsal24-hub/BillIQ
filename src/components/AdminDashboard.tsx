@@ -47,9 +47,11 @@ import {
   Sparkles,
   RotateCcw,
   CheckCircle2,
-  Activity
+  Activity,
+  Gauge
 } from "lucide-react";
 import { LiveAnalyticsDashboard } from "./LiveAnalyticsDashboard";
+import { SpeedInsightsDashboard } from "./SpeedInsightsDashboard";
 import {
   ResponsiveContainer,
   BarChart,
@@ -173,7 +175,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onUserUpdated,
   currency = "INR",
 }) => {
-  const safeCurrency = !currency || currency.trim().toUpperCase() === "AOA" ? "INR" : currency.trim().toUpperCase();
+  const rawCurr = (currency || "INR").trim().toUpperCase();
+  const safeCurrency = !rawCurr || rawCurr === "AOA" || rawCurr === "AO" || rawCurr === "KZ" || rawCurr === "KZ." || rawCurr === "ANGOLA" ? "INR" : rawCurr;
   const [usersList, setUsersList] = useState<any[]>([]);
   const [loadingUsers, setLoadingUsers] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -244,7 +247,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     notes: "",
   });
 
-  const [adminMainTab, setAdminMainTab] = useState<"live_pulse" | "user_directory" | "campaigns" | "growth">("live_pulse");
+  const [adminMainTab, setAdminMainTab] = useState<"live_pulse" | "user_directory" | "campaigns" | "growth" | "speed_insights">("live_pulse");
 
   const allDocuments = useMemo(() => {
     const docs: any[] = [];
@@ -317,6 +320,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [deleteAdminPassword, setDeleteAdminPassword] = useState<string>("");
   const [deletePasswordError, setDeletePasswordError] = useState<string>("");
   const [isDeletingUser, setIsDeletingUser] = useState<boolean>(false);
+
+  // Bulk Purge State (Wipe all non-admin accounts for clean launch)
+  const [isPurgeModalOpen, setIsPurgeModalOpen] = useState<boolean>(false);
+  const [purgeAdminPassword, setPurgeAdminPassword] = useState<string>("");
+  const [purgePasswordError, setPurgePasswordError] = useState<string>("");
+  const [isPurgingAll, setIsPurgingAll] = useState<boolean>(false);
 
   const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
   const [previewPdfDocName, setPreviewPdfDocName] = useState<string>("");
@@ -454,75 +463,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         combinedUsers = [
           {
             id: ADMIN_UID,
-            email: adminUser?.email || "admin@billiq.ai",
-            displayName: adminUser?.displayName || "System Administrator",
+            email: "mehtavatsal24@gmail.com",
+            displayName: "Founder",
             accountStatus: "Active",
             plan: "Enterprise Admin",
             updatedAt: new Date().toISOString(),
             business: {
               companyName: "BillIQ Global Technologies",
-              email: adminUser?.email || "admin@billiq.ai",
-              phone: "+1 (800) 555-0199",
+              email: "mehtavatsal24@gmail.com",
+              phone: "+91 98765 43210",
               gstin: "27AAAAA0000A1Z5",
               country: "India"
             },
-            history: [
-              {
-                id: "INV-2026-001",
-                documentNumber: "INV-2026-001",
-                type: "INVOICE",
-                date: "2026-07-28",
-                customer: { name: "Acme Industrial Corp", gstin: "27BBBCC1111B1Z2" },
-                items: [{ description: "Enterprise Cloud License", quantity: 1, rate: 25000, taxRate: 18 }],
-                grandTotal: 29500
-              }
-            ],
+            history: [],
             logs: [
-              { id: "l1", timestamp: new Date().toISOString(), action: "User Logged In", details: "Admin console initialized", isError: false, category: "auth" },
-              { id: "l2", timestamp: new Date(Date.now() - 3600000).toISOString(), action: "Cloud Sync Success", details: "Synced 1 user records", isError: false, category: "sync" }
+              { id: "l1", timestamp: new Date().toISOString(), action: "User Logged In", details: "Admin console initialized", isError: false, category: "auth" }
             ],
-            adminNotes: "Super Admin User Account. Responsible for global platform auditing."
+            adminNotes: "Founder / Primary Administrator Account."
           },
           {
-            id: "usr_demo_101",
-            email: "demo.business@example.com",
-            displayName: "Demo Global Trades Ltd",
+            id: "BzfnRqFFUtVeoqjxcLolmu6SRIA3",
+            email: "support@billiq.site",
+            displayName: "BillIQ Support",
             accountStatus: "Active",
-            plan: "Pro Plan ($49/mo)",
-            updatedAt: new Date(Date.now() - 86400000).toISOString(),
+            plan: "Enterprise Admin",
+            updatedAt: new Date().toISOString(),
             business: {
-              companyName: "Demo Global Trades Ltd",
-              email: "demo.business@example.com",
+              companyName: "BillIQ Support",
+              email: "support@billiq.site",
               phone: "+91 98765 43210",
-              gstin: "07AAACD9999E1Z8",
+              gstin: "27AAAAA0000A1Z5",
               country: "India"
             },
-            history: [
-              {
-                id: "INV-8890",
-                documentNumber: "INV-8890",
-                type: "TAX INVOICE",
-                date: "2026-07-25",
-                customer: { name: "Apex Agri Logistics", gstin: "07AABCA5555D1Z0" },
-                items: [{ description: "High-Yield Crop Hybrid Seeds (Grade A)", quantity: 250, rate: 450, taxRate: 18 }],
-                grandTotal: 132750
-              },
-              {
-                id: "QTN-4421",
-                documentNumber: "QTN-4421",
-                type: "QUOTATION",
-                date: "2026-07-20",
-                customer: { name: "Zenith Agri Farms Ltd", gstin: "07BBBAC2222D1Z1" },
-                items: [{ description: "Automated Drip Irrigation System Kit", quantity: 15, rate: 8500, taxRate: 18 }],
-                grandTotal: 150450
-              }
-            ],
+            history: [],
             logs: [
-              { id: "l10", timestamp: new Date(Date.now() - 7200000).toISOString(), action: "PDF Exported", details: "Generated INV-8890 PDF", isError: false, category: "document" },
-              { id: "l11", timestamp: new Date(Date.now() - 14400000).toISOString(), action: "Firestore Network Timeout", details: "Connection retry successful after 2s", isError: true, category: "sync" },
-              { id: "l12", timestamp: new Date(Date.now() - 86400000).toISOString(), action: "Settings Updated", details: "Updated GSTIN & Bank account info", isError: false, category: "settings" }
+              { id: "l2", timestamp: new Date().toISOString(), action: "Account Active", details: "Official support account", isError: false, category: "auth" }
             ],
-            adminNotes: "Customer requested extended limits for bulk PDF exports. Verified GSTIN compliance."
+            adminNotes: "Official Support & Administration Account."
           }
         ];
       }
@@ -1269,10 +1246,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       effectiveDocRemaining = baseRem + overrideForm.bonusDocCredits;
     }
 
+    const lowerEffPlan = (effectivePlan || "").toLowerCase();
+    const isEnterprise = lowerEffPlan.includes("enterprise") || lowerEffPlan.includes("admin");
+    const isPro = lowerEffPlan.includes("pro");
+    const isEffPaid = isEnterprise || isPro;
+    if (isEffPaid) {
+      effectiveDocRemaining = 999999;
+    }
+    const effectivePlanTier = isEnterprise ? "enterprise" : isPro ? "pro" : ((effectiveDocRemaining !== undefined && effectiveDocRemaining > 0) ? "free-trial" : "expired");
+    const effectiveTrialExhausted = !isEffPaid && (effectiveDocRemaining !== undefined && effectiveDocRemaining <= 0);
+
     const updatedUser = {
       ...selectedUser,
       plan: effectivePlan,
       planName: effectivePlan,
+      planTier: effectivePlanTier,
+      trialExhausted: effectiveTrialExhausted,
       accountStatus: effectiveStatus,
       documentsRemaining: effectiveDocRemaining,
       overrides: {
@@ -1286,7 +1275,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       await saveToCloud(`users/${selectedUser.id}`, updatedUser);
+      const email = getUserEmail(selectedUser);
+      if (email) {
+        await updateTrialLedger(email, {
+          planTier: effectivePlanTier,
+          planName: effectivePlan,
+          documentsRemaining: effectiveDocRemaining,
+          trialExhausted: effectiveTrialExhausted,
+        });
+      }
       setUsersList((prev) => prev.map((u) => (u.id === selectedUser.id ? updatedUser : u)));
+      if (onUserUpdated) {
+        onUserUpdated(updatedUser);
+      }
       logUserActivity(
         adminId,
         "User Overrides Applied",
@@ -1476,6 +1477,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const resolvedEmail = newUserForm.email.trim();
     const resolvedUsername = (newUserForm.displayName || newUserForm.companyName || resolvedEmail.split('@')[0] || "New Enterprise").trim();
 
+    const isPro = (newUserForm.plan || "").toLowerCase().includes("pro");
+    const isEnterprise = (newUserForm.plan || "").toLowerCase().includes("enterprise");
+    const isPaid = isPro || isEnterprise;
+    const initialRemaining = isPaid ? 999999 : 5;
+    const planTierVal = isEnterprise ? "enterprise" : isPro ? "pro" : "free-trial";
+    const planNameVal = isEnterprise ? "Enterprise Admin" : isPro ? "Pro Plan" : "Free Trial";
+
     const newUserObj = {
       id: newUid,
       email: resolvedEmail,
@@ -1485,9 +1493,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       authUsername: resolvedUsername,
       displayName: resolvedUsername,
       accountStatus: newUserForm.status || "Active",
-      plan: newUserForm.plan || "Free Trial",
-      planTier: newUserForm.plan === "Free Trial" ? "free-trial" : newUserForm.plan,
-      planName: newUserForm.plan || "Free Trial",
+      status: (newUserForm.status || "Active").toLowerCase(),
+      plan: planNameVal,
+      planTier: planTierVal,
+      planName: planNameVal,
+      documentsRemaining: initialRemaining,
+      documentsUsed: 0,
+      lifetimeCreatedCount: 0,
+      totalGeneratedDocsCount: 0,
+      trialExhausted: false,
+      trialUsed: true,
       hasSeenWelcome: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1507,6 +1522,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       await saveToCloud(`users/${newUid}`, newUserObj);
+      if (resolvedEmail) {
+        await updateTrialLedger(resolvedEmail, {
+          email: resolvedEmail,
+          planTier: planTierVal,
+          planName: planNameVal,
+          documentsRemaining: initialRemaining,
+          documentsUsed: 0,
+          lifetimeCreatedCount: 0,
+          totalGeneratedDocsCount: 0,
+          trialExhausted: false,
+          trialUsed: true,
+          firstCreatedUid: newUid
+        });
+      }
       setUsersList((prev) => [newUserObj, ...prev]);
       setSelectedUserId(newUid);
       setIsNewUserModalOpen(false);
@@ -1642,6 +1671,65 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setDeletePasswordError("Failed to delete user account: " + (err?.message || String(err)));
     } finally {
       setIsDeletingUser(false);
+    }
+  };
+
+  // Purge ALL User Data & Accounts Except the 2 Preserved Admin / Founder Accounts
+  const handleConfirmPurgeAll = async () => {
+    const currentPass = localStorage.getItem("admin_security_password") || localStorage.getItem("billiq_admin_security_pass") || adminSecurityPassword;
+
+    if (!currentPass) {
+      setPurgePasswordError("No security password configured yet. Click 'Set / Change Password' above to create one first.");
+      return;
+    }
+
+    const enteredPass = purgeAdminPassword.trim();
+    if (!enteredPass) {
+      setPurgePasswordError("Admin security password is required to authorize database wipe.");
+      return;
+    }
+
+    if (enteredPass !== currentPass) {
+      setPurgePasswordError("Incorrect Admin Security Password! Purge operation rejected.");
+      return;
+    }
+
+    setIsPurgingAll(true);
+    setPurgePasswordError("");
+
+    try {
+      // Filter out preserved accounts:
+      // 1. Founder: "XssthfE8PHMi9j3iNMmCYQ9Sqgk2" / "mehtavatsal24@gmail.com"
+      // 2. Official Admin / Support: "BzfnRqFFUtVeoqjxcLolmu6SRIA3" / "support@billiq.site"
+      const usersToErase = usersList.filter((u) => {
+        const email = getUserEmail(u).toLowerCase().trim();
+        const id = u.id;
+        const isPreservedId = id === ADMIN_UID || id === "BzfnRqFFUtVeoqjxcLolmu6SRIA3";
+        const isPreservedEmail = email === "mehtavatsal24@gmail.com" || email === "support@billiq.site" || email === "admin@smartbill.ai";
+        return !isPreservedId && !isPreservedEmail;
+      });
+
+      console.log(`[Admin Purge] Erasing data of ${usersToErase.length} user accounts...`);
+
+      for (const u of usersToErase) {
+        try {
+          await deleteUserAccount(u.id);
+        } catch (delErr) {
+          console.warn(`[Admin Purge] Could not delete user account ${u.id}:`, delErr);
+        }
+      }
+
+      // Refresh list
+      await loadAllUsers();
+      setIsPurgeModalOpen(false);
+      setPurgeAdminPassword("");
+      showAdminToast(`Successfully erased ${usersToErase.length} user accounts. App is now completely refreshed for new client logins!`, "success");
+      alert(`Successfully wiped all non-admin data. Erased ${usersToErase.length} account(s). Preserved Founder and Support accounts.`);
+    } catch (err: any) {
+      console.error("Purge all failed:", err);
+      setPurgePasswordError("Failed to purge accounts: " + (err?.message || String(err)));
+    } finally {
+      setIsPurgingAll(false);
     }
   };
 
@@ -2209,6 +2297,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="flex items-center gap-3">
           <button
             onClick={() => {
+              setPurgeAdminPassword("");
+              setPurgePasswordError("");
+              setIsPurgeModalOpen(true);
+            }}
+            className="px-3 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-300 hover:text-red-200 text-xs font-semibold rounded-lg border border-red-800/60 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+            title="Erase all non-admin account data for clean client launch"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+            <span>Reset App Data</span>
+          </button>
+
+          <button
+            onClick={() => {
               setCurrentPassInput("");
               setNewPassInput("");
               setConfirmPassInput("");
@@ -2311,6 +2412,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           >
             <BarChart2 className="w-4 h-4 text-amber-400" />
             <span>Growth & Document Telemetry</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAdminMainTab("speed_insights")}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              adminMainTab === "speed_insights"
+                ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/20 ring-1 ring-white/20"
+                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/80"
+            }`}
+          >
+            <Gauge className="w-4 h-4 text-emerald-400" />
+            <span>Speed Insights & Web Vitals</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              Vercel RUM
+            </span>
           </button>
         </div>
 
@@ -4546,6 +4663,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {/* TAB 5: SPEED INSIGHTS & WEB VITALS DASHBOARD */}
+      {adminMainTab === "speed_insights" && (
+        <SpeedInsightsDashboard />
+      )}
+
       {/* RAW JSON VIEWER MODAL */}
       {jsonModalData && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6">
@@ -5177,6 +5299,133 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <>
                     <Trash2 className="w-4 h-4" />
                     <span>Confirm & Delete Permanently</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BULK PURGE / RESET APP DATA MODAL */}
+      {isPurgeModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-red-800 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-5 bg-gradient-to-r from-red-950 to-zinc-900 border-b border-red-900/50 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-red-600/20 text-red-400 rounded-xl border border-red-500/30">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">Reset App Data & Wipe Non-Admin Accounts</h3>
+                  <p className="text-xs text-red-300">Clean Slate Launch Preparation</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (!isPurgingAll) {
+                    setIsPurgeModalOpen(false);
+                  }
+                }}
+                className="p-1.5 text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="p-3.5 bg-red-950/40 border border-red-900/50 rounded-xl text-red-200 space-y-2">
+                <p className="font-bold flex items-center gap-1.5 text-red-400 text-xs uppercase tracking-wide">
+                  <AlertTriangle className="w-4 h-4 text-red-400" />
+                  Warning: Comprehensive Cloud & Database Reset
+                </p>
+                <p className="text-zinc-300 leading-relaxed">
+                  This action will erase all data and accounts from Firestore and backend databases, leaving only the <strong className="text-white">2 administrative/founder accounts</strong>:
+                </p>
+                <div className="p-2.5 bg-zinc-950/90 rounded-xl border border-zinc-800 space-y-1 font-mono text-zinc-300">
+                  <p className="text-emerald-400 font-bold">✓ Preserved 1: Founder (mehtavatsal24@gmail.com / XssthfE8PHMi9j3iNMmCYQ9Sqgk2)</p>
+                  <p className="text-emerald-400 font-bold">✓ Preserved 2: Support (support@billiq.site / BzfnRqFFUtVeoqjxcLolmu6SRIA3)</p>
+                </div>
+                <p className="text-zinc-400 text-[11px]">
+                  All other client accounts, subcollections, items, parties, documents, and trial histories will be completely purged so any deleted user who signs up again will be treated strictly as a fresh new user with a clean trial ledger.
+                </p>
+              </div>
+
+              {!(localStorage.getItem("admin_security_password") || localStorage.getItem("billiq_admin_security_pass") || adminSecurityPassword) ? (
+                <div className="p-3 bg-amber-950/50 border border-amber-800/80 rounded-xl text-amber-200 space-y-2">
+                  <p className="font-bold flex items-center gap-1.5 text-amber-300">
+                    <Key className="w-4 h-4 text-amber-400" />
+                    Security Password Required
+                  </p>
+                  <p className="text-zinc-300 text-xs leading-relaxed">
+                    No admin security password configured. Set your password first to authorize resetting app data.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCurrentPassInput("");
+                      setNewPassInput("");
+                      setConfirmPassInput("");
+                      setSetPasswordModalError("");
+                      setSetPasswordModalSuccess("");
+                      setIsSetPasswordModalOpen(true);
+                    }}
+                    className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow"
+                  >
+                    <Key className="w-4 h-4" />
+                    <span>Set Admin Security Password Now</span>
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-zinc-200 font-bold mb-1.5">
+                    Enter Admin Security Password to Authorize Reset
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Enter admin security password"
+                    value={purgeAdminPassword}
+                    onChange={(e) => {
+                      setPurgeAdminPassword(e.target.value);
+                      setPurgePasswordError("");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !isPurgingAll) {
+                        handleConfirmPurgeAll();
+                      }
+                    }}
+                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded-xl text-white font-mono placeholder:text-zinc-600 focus:outline-none focus:border-red-500"
+                    autoFocus
+                  />
+                  {purgePasswordError && (
+                    <p className="mt-1.5 text-red-400 font-semibold text-[11px]">{purgePasswordError}</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-zinc-950 border-t border-zinc-800 flex items-center justify-end gap-2.5">
+              <button
+                onClick={() => setIsPurgeModalOpen(false)}
+                disabled={isPurgingAll}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold rounded-xl transition-all cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmPurgeAll}
+                disabled={isPurgingAll || !(localStorage.getItem("admin_security_password") || localStorage.getItem("billiq_admin_security_pass") || adminSecurityPassword)}
+                className="px-5 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-lg shadow-red-600/30 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isPurgingAll ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Erasing Data & Wiping Accounts...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Confirm & Wipe All Non-Admin Accounts</span>
                   </>
                 )}
               </button>

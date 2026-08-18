@@ -462,9 +462,26 @@ interface RegisteredUser {
 }
 
 let registeredUsers: RegisteredUser[] = [
-  { id: "usr_admin", username: "admin", email: "admin@smartbill.ai", createdAt: new Date().toISOString() },
-  { id: "usr_demo", username: "demouser", email: "demo@smartbill.ai", createdAt: new Date().toISOString() },
-  { id: "usr_john", username: "johndoe", email: "john@example.com", createdAt: new Date().toISOString() },
+  {
+    id: "XssthfE8PHMi9j3iNMmCYQ9Sqgk2",
+    username: "Founder",
+    email: "mehtavatsal24@gmail.com",
+    createdAt: "2026-08-11T09:10:33.539Z",
+    updatedAt: new Date().toISOString(),
+    lastActive: new Date().toISOString(),
+    lastSeen: new Date().toISOString(),
+    isOnline: true,
+  },
+  {
+    id: "BzfnRqFFUtVeoqjxcLolmu6SRIA3",
+    username: "BillIQ",
+    email: "support@billiq.site",
+    createdAt: "2026-08-11T09:27:15.829Z",
+    updatedAt: new Date().toISOString(),
+    lastActive: new Date().toISOString(),
+    lastSeen: new Date().toISOString(),
+    isOnline: true,
+  },
 ];
 
 function loadUsersFromDisk() {
@@ -528,6 +545,83 @@ app.post("/api/check-username", (req, res) => {
   } catch (err) {
     console.error("check-username error:", err);
     return res.status(500).json({ success: false, error: "Failed to check username." });
+  }
+});
+
+// Admin Security Alert Endpoint for Failed PIN Attempts
+app.post("/api/admin/security-alert", async (req, res) => {
+  try {
+    const { attemptedEmail, attemptsCount, userAgent, clientIp, timestamp, lockDurationMinutes } = req.body;
+    const alertRecipient = "mehtavatsal24@gmail.com";
+    const alertTime = timestamp || new Date().toISOString();
+    const formattedDate = new Date(alertTime).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+    const ip = clientIp || req.ip || req.headers["x-forwarded-for"] || "Unknown IP";
+    const agent = userAgent || req.headers["user-agent"] || "Unknown Browser / Client";
+
+    const subject = `🚨 [SECURITY ALERT] Unauthorized Admin Console Access Attempts on BillIQ`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #09090b; color: #f4f4f5; border: 1px solid #dc2626; border-radius: 16px;">
+        <div style="text-align: center; padding-bottom: 16px; border-bottom: 1px solid #27272a;">
+          <h2 style="color: #ef4444; margin: 0; font-size: 20px; text-transform: uppercase; letter-spacing: 1px;">🚨 Admin Security Alert</h2>
+          <p style="color: #a1a1aa; font-size: 13px; margin: 6px 0 0 0;">Multiple Failed Administrator PIN Attempts Detected</p>
+        </div>
+        
+        <div style="padding: 20px 0; font-size: 14px; line-height: 1.6;">
+          <p style="margin: 0 0 16px 0; color: #fca5a5; font-weight: bold;">
+            An alert has been triggered because incorrect administrator PINs were entered ${attemptsCount || 3} consecutive times.
+          </p>
+          
+          <div style="background-color: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <tr>
+                <td style="padding: 6px 0; color: #71717a; font-weight: bold; width: 140px;">Timestamp (IST):</td>
+                <td style="padding: 6px 0; color: #ffffff; font-family: monospace;">${formattedDate}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #71717a; font-weight: bold;">Logged Account:</td>
+                <td style="padding: 6px 0; color: #60a5fa; font-family: monospace;">${attemptedEmail || "Unspecified"}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #71717a; font-weight: bold;">Consecutive Attempts:</td>
+                <td style="padding: 6px 0; color: #f87171; font-weight: bold;">${attemptsCount || 3} Failed Attempts</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #71717a; font-weight: bold;">Lockout Status:</td>
+                <td style="padding: 6px 0; color: #fbbf24; font-weight: bold;">Temporarily Locked for ${lockDurationMinutes || 5} minutes</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #71717a; font-weight: bold;">IP Address:</td>
+                <td style="padding: 6px 0; color: #e4e4e7; font-family: monospace;">${ip}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #71717a; font-weight: bold;">Client Agent:</td>
+                <td style="padding: 6px 0; color: #a1a1aa; font-size: 11px; word-break: break-all;">${agent}</td>
+              </tr>
+            </table>
+          </div>
+
+          <p style="margin: 0; color: #a1a1aa; font-size: 12px;">
+            If this was you, please wait for the ${lockDurationMinutes || 5}-minute cooldown to expire before attempting again. If you did not initiate this, your administrator console remains secured behind zero-knowledge encryption and lockout protection.
+          </p>
+        </div>
+
+        <div style="border-top: 1px solid #27272a; padding-top: 12px; text-align: center; color: #52525b; font-size: 11px;">
+          BillIQ Automated Security Shield • System Notification
+        </div>
+      </div>
+    `;
+
+    await dispatchEmail({
+      to: alertRecipient,
+      subject,
+      html,
+    });
+
+    console.log(`[Security Alert] Sent failed PIN alert notification to ${alertRecipient}`);
+    return res.json({ success: true, message: "Security alert dispatched successfully." });
+  } catch (err: any) {
+    console.error("Security alert dispatch error:", err);
+    return res.status(500).json({ success: false, error: "Failed to dispatch security alert." });
   }
 });
 

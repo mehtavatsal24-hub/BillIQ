@@ -59,6 +59,7 @@ import {
   ArrowRight
 } from "lucide-react";
 import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import { smartAnalyzeDimensionalReport, checkTolerances, smartGenerateMtcData } from './services/geminiService';
 import { motion, AnimatePresence } from "motion/react";
 import JSZip from "jszip";
@@ -123,7 +124,6 @@ import { LandedCostSheet } from "./components/LandedCostSheet";
 import { BulkEditor } from "./components/BulkEditor";
 import { CustomerSelector } from "./components/CustomerSelector";
 import { Dashboard } from "./components/Dashboard";
-import { AnalyticsView } from "./components/AnalyticsView";
 import { PartyList } from "./components/PartyList";
 import { generateInvoicePDF, downloadInvoicePDF } from "./services/pdfService";
 import { exportLandedCostSheetToExcel, exportInvoiceDataToLandedCostExcel } from "./services/excelService";
@@ -438,22 +438,22 @@ const getSavedRoute = (userId?: string | null): string | null => {
         if (normalized === "login" || normalized === "signup") normalized = "auth";
         if (VALID_ROUTES.includes(normalized) && normalized !== "landing" && normalized !== "auth") return normalized;
       }
-    }
 
-    const globalRoute = localStorage.getItem("billiq_active_view") ||
-                        localStorage.getItem("active_app_route") ||
-                        localStorage.getItem("active_app_step");
-    if (globalRoute) {
-      let normalized = globalRoute.toLowerCase().trim();
-      if (normalized === "documents") normalized = "history";
-      if (normalized === "workspace") normalized = "invoice";
-      if (normalized === "login" || normalized === "signup") normalized = "auth";
-      if (VALID_ROUTES.includes(normalized) && (!userId || (normalized !== "landing" && normalized !== "auth"))) return normalized;
+      const globalRoute = localStorage.getItem("billiq_active_view") ||
+                          localStorage.getItem("active_app_route") ||
+                          localStorage.getItem("active_app_step");
+      if (globalRoute) {
+        let normalized = globalRoute.toLowerCase().trim();
+        if (normalized === "documents") normalized = "history";
+        if (normalized === "workspace") normalized = "invoice";
+        if (normalized === "login" || normalized === "signup") normalized = "auth";
+        if (VALID_ROUTES.includes(normalized) && normalized !== "landing" && normalized !== "auth") return normalized;
+      }
     }
   } catch (e) {
     console.error("Error reading saved route:", e);
   }
-  return null;
+  return "landing";
 };
 
 // Helper functions moved outside for global accessibility
@@ -1016,28 +1016,27 @@ export default function App() {
   const [isFirstLoad, setIsFirstLoad] = useState(true);
   const [showLanding, setShowLanding] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
-      const savedRoute = getSavedRoute(null);
-      if (savedRoute === "landing") return true;
-      if (savedRoute === "auth" || savedRoute === "login" || savedRoute === "signup" || savedRoute === "features") return false;
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlView = (urlParams.get("view") || urlParams.get("route") || "").toLowerCase().trim();
+      if (urlView === "auth" || urlView === "login" || urlView === "signup" || urlView === "features") return false;
       const isLoggedIn = localStorage.getItem("billiq_is_logged_in") === "true";
       if (isLoggedIn) return false;
-      if (savedRoute && ["dashboard", "profile", "history", "customers", "suppliers", "workspace", "invoice", "admin"].includes(savedRoute)) {
-        return false;
-      }
     }
     return true;
   });
   const [showFeatures, setShowFeatures] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
-      return getSavedRoute(null) === "features";
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlView = (urlParams.get("view") || urlParams.get("route") || "").toLowerCase().trim();
+      return urlView === "features";
     }
     return false;
   });
   const [showAuthScreen, setShowAuthScreen] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
-      const savedRoute = getSavedRoute(null);
-      const isLoggedIn = localStorage.getItem("billiq_is_logged_in") === "true";
-      if (!isLoggedIn && savedRoute && ["auth", "login", "signup", "dashboard", "profile", "history", "customers", "suppliers", "workspace", "invoice", "admin"].includes(savedRoute)) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlView = (urlParams.get("view") || urlParams.get("route") || "").toLowerCase().trim();
+      if (urlView === "auth" || urlView === "login" || urlView === "signup") {
         return true;
       }
     }
@@ -1058,14 +1057,18 @@ export default function App() {
     setImpersonatedUser(userData);
     setIsAdminConsoleActive(false);
     if (userData.business) {
+      const rawCurr = (userData.business.currency || "INR").trim().toUpperCase();
+      const cleanCurrency = !rawCurr || rawCurr === "AOA" || rawCurr === "AO" || rawCurr === "KZ" || rawCurr === "KZ." || rawCurr === "ANGOLA" ? "INR" : userData.business.currency;
       setBusiness({
         name: userData.business.companyName || userData.business.name || "",
         gstin: userData.business.gstin || "",
         address: userData.business.address || "",
         phone: userData.business.phone || "",
         email: userData.business.email || "",
-        ...userData.business
+        ...userData.business,
+        currency: cleanCurrency
       });
+      setCurrency(cleanCurrency);
     }
     if (userData.savedCustomers) setSavedCustomers(userData.savedCustomers);
     if (userData.savedSuppliers) setSavedSuppliers(userData.savedSuppliers);
@@ -1119,10 +1122,12 @@ export default function App() {
       if (local) {
         const parsed = JSON.parse(local);
         if (parsed && typeof parsed === "object") {
+          const rawCurr = (parsed.currency || "INR").trim().toUpperCase();
+          const cleanCurrency = !rawCurr || rawCurr === "AOA" || rawCurr === "AO" || rawCurr === "KZ" || rawCurr === "KZ." || rawCurr === "ANGOLA" ? "INR" : parsed.currency;
           return {
             ...parsed,
-            country: parsed.country || "India",
-            currency: parsed.currency || "INR",
+            country: parsed.country && parsed.country !== "Angola" && parsed.country !== "AO" ? parsed.country : "India",
+            currency: cleanCurrency,
           };
         }
       }
@@ -1200,12 +1205,17 @@ export default function App() {
   const [autoExportBadge, setAutoExportBadge] = useState(false);
   const [isTaxEnabled, setIsTaxEnabled] = useState(true);
   const [isIgst, setIsIgst] = useState(false);
-  const [currency, setCurrency] = useState(() => business.currency || "INR");
+  const [currency, setCurrency] = useState(() => {
+    const rawCurr = (business.currency || "INR").trim().toUpperCase();
+    return !rawCurr || rawCurr === "AOA" || rawCurr === "AO" || rawCurr === "KZ" || rawCurr === "KZ." || rawCurr === "ANGOLA" ? "INR" : (business.currency || "INR");
+  });
 
   // Keep active currency synced with business profile settings when updated
   useEffect(() => {
     if (business.currency) {
-      setCurrency(business.currency);
+      const rawCurr = business.currency.trim().toUpperCase();
+      const clean = !rawCurr || rawCurr === "AOA" || rawCurr === "AO" || rawCurr === "KZ" || rawCurr === "KZ." || rawCurr === "ANGOLA" ? "INR" : business.currency;
+      setCurrency(clean);
     }
   }, [business.currency]);
   const [exchangeRate, setExchangeRate] = useState(1);
@@ -2751,20 +2761,18 @@ export default function App() {
         }
       }
     } else {
-      // Unauthenticated Visitor: Redirect to Auth screen if trying to access protected app routes, or show Landing/Features
-      if (savedRoute === "auth" || savedRoute === "login" || savedRoute === "signup") {
+      // Unauthenticated Visitor: Strictly show Landing page by default unless URL specifies auth or features
+      const urlParams = typeof window !== "undefined" && window.location ? new URLSearchParams(window.location.search) : null;
+      const urlView = (urlParams?.get("view") || urlParams?.get("route") || "").toLowerCase().trim();
+
+      if (urlView === "auth" || urlView === "login" || urlView === "signup") {
         setShowFeatures(false);
         setShowLanding(false);
         setShowAuthScreen(true);
-      } else if (savedRoute === "features") {
+      } else if (urlView === "features") {
         setShowFeatures(true);
         setShowLanding(false);
         setShowAuthScreen(false);
-      } else if (savedRoute && ["dashboard", "profile", "history", "customers", "suppliers", "workspace", "invoice", "admin", "privacy", "terms", "compliance"].includes(savedRoute)) {
-        // Protected app routes accessed without being logged in -> Redirect to Auth screen
-        setShowFeatures(false);
-        setShowLanding(false);
-        setShowAuthScreen(true);
       } else {
         setShowFeatures(false);
         setShowAuthScreen(false);
@@ -5068,7 +5076,8 @@ export default function App() {
       const targetUid = impersonatedUser ? impersonatedUser.id : user?.uid;
       const targetEmail = impersonatedUser?.email || user?.email || userProfile?.signupEmail || userProfile?.authEmail || "";
       const optCount = incrementLocalUserDocCount(targetUid);
-      const optRemaining = Math.max(0, 5 - optCount);
+      const currentRem = userProfile?.documentsRemaining !== undefined ? userProfile.documentsRemaining : Math.max(0, 5 - (userProfile?.lifetimeCreatedCount || 0));
+      const optRemaining = Math.max(0, currentRem - 1);
       const optExhausted = optRemaining <= 0;
       setUserProfile((prev: any) => prev ? ({
         ...prev,
@@ -6081,76 +6090,6 @@ export default function App() {
             <Logo onClick={() => navigateToStep("dashboard")} />
           </motion.div>
 
-          {/* Top Navigation Menu (Desktop) */}
-          <nav className="hidden xl:flex items-center gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/80">
-            <button
-              onClick={() => navigateToStep("dashboard")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                step === "dashboard"
-                  ? "bg-white text-brand-600 shadow-xs"
-                  : "text-zinc-600 hover:text-zinc-900"
-              }`}
-            >
-              <LayoutDashboard className="w-3.5 h-3.5" />
-              <span>Dashboard</span>
-            </button>
-            <button
-              onClick={() => navigateToStep("analytics")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                step === "analytics"
-                  ? "bg-white text-brand-600 shadow-xs"
-                  : "text-zinc-600 hover:text-zinc-900"
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>Analytics</span>
-            </button>
-            <button
-              onClick={() => navigateToStep("history")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                step === "history"
-                  ? "bg-white text-brand-600 shadow-xs"
-                  : "text-zinc-600 hover:text-zinc-900"
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5" />
-              <span>History</span>
-            </button>
-            <button
-              onClick={() => navigateToStep("customers")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                step === "customers"
-                  ? "bg-white text-brand-600 shadow-xs"
-                  : "text-zinc-600 hover:text-zinc-900"
-              }`}
-            >
-              <Users className="w-3.5 h-3.5" />
-              <span>Customers</span>
-            </button>
-            <button
-              onClick={() => navigateToStep("suppliers")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                step === "suppliers"
-                  ? "bg-white text-brand-600 shadow-xs"
-                  : "text-zinc-600 hover:text-zinc-900"
-              }`}
-            >
-              <Truck className="w-3.5 h-3.5" />
-              <span>Suppliers</span>
-            </button>
-            <button
-              onClick={() => navigateToStep("profile")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                step === "profile"
-                  ? "bg-white text-brand-600 shadow-xs"
-                  : "text-zinc-600 hover:text-zinc-900"
-              }`}
-            >
-              <Settings className="w-3.5 h-3.5" />
-              <span>Profile & Settings</span>
-            </button>
-          </nav>
-
           {/* Right Group: Auto-save status, Country/Currency, New Bill CTA, User Sign Out */}
           <div className="flex items-center gap-2.5 shrink-0">
             {isAdminUser(user) && (
@@ -6301,18 +6240,6 @@ export default function App() {
               </button>
 
               <button
-                onClick={() => navigateToStep("analytics")}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
-                  step === "analytics"
-                    ? "bg-brand-600 text-white shadow-md shadow-brand-500/20"
-                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
-                }`}
-              >
-                <BarChart3 className="w-4 h-4 shrink-0" />
-                <span>Analytics</span>
-              </button>
-
-              <button
                 onClick={() => navigateToStep("history")}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
                   step === "history"
@@ -6373,40 +6300,6 @@ export default function App() {
 
             {/* Right Main Content View Area */}
             <div className="lg:col-span-9 xl:col-span-9.5">
-              {/* Founder Free Documents Gift Banner */}
-              {userProfile?.documentsRemaining !== undefined && userProfile.documentsRemaining > 0 && (userProfile?.trialCreditsGranted || userProfile?.founderGrantNotice) && (
-                <div className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-4 rounded-2xl shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 border border-amber-300/40">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 shadow-inner">
-                      <Sparkles className="w-5 h-5 text-amber-100" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full text-white">
-                          Special Gift from Founder
-                        </span>
-                        <span className="text-xs font-bold text-amber-100">
-                          {userProfile.documentsRemaining} Free {userProfile.documentsRemaining === 1 ? "Document" : "Documents"} Available
-                        </span>
-                      </div>
-                      <p className="text-xs sm:text-sm font-extrabold text-white mt-0.5">
-                        🎉 Hurray! Founder gave you {userProfile.trialCreditsGranted || userProfile.founderGrantNotice?.grantedCount || 5} docs creation for free! Enjoy creating your invoices.
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => {
-                      handleNewDocument();
-                      setStep("invoice");
-                    }}
-                    className="px-4 py-2 bg-white hover:bg-amber-50 text-amber-900 rounded-xl text-xs font-black shadow-md transition-all cursor-pointer whitespace-nowrap self-start sm:self-auto shrink-0 flex items-center gap-1.5"
-                  >
-                    <span>Create Document Now</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-
               <AnimatePresence mode="wait">
                 {step === "dashboard" ? (
                   <motion.div
@@ -6430,22 +6323,6 @@ export default function App() {
                       onClearHistory={clearHistory}
                       onViewAll={() => navigateToStep("history")}
                       onUpdatePaymentStatus={handleUpdatePaymentStatus}
-                    />
-                  </motion.div>
-                ) : step === "analytics" ? (
-                  <motion.div
-                    key="analytics"
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                  >
-                    <AnalyticsView 
-                      history={history}
-                      customers={savedCustomers}
-                      currency={currency || business.currency || "INR"}
-                      onOpenDocument={loadDocument}
-                      onNavigate={(s) => navigateToStep(s as any)}
-                      onNewBill={handleNewDocument}
                     />
                   </motion.div>
                 ) : step === "history" ? (
@@ -7189,22 +7066,6 @@ export default function App() {
         exit={{ opacity: 0, y: -10 }}
         className="space-y-6"
       >
-        {/* Founder Free Documents Gift Banner inside Invoice workspace */}
-        {userProfile?.documentsRemaining !== undefined && userProfile.documentsRemaining > 0 && (userProfile?.trialCreditsGranted || userProfile?.founderGrantNotice) && (
-          <div className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white px-4 py-3 rounded-2xl shadow-md flex items-center justify-between gap-3 border border-amber-300/40">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0">
-                <Sparkles className="w-4 h-4 text-amber-100" />
-              </div>
-              <div>
-                <p className="text-xs sm:text-sm font-extrabold text-white">
-                  🎉 Hurray! Founder gave you {userProfile.trialCreditsGranted || userProfile.founderGrantNotice?.grantedCount || 5} docs creation for free! ({userProfile.documentsRemaining} documents remaining)
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Back to dashboard header CTA inside invoice mode */}
         <div className="flex items-center justify-between pb-2 border-b border-zinc-200/60">
           <button
@@ -11510,13 +11371,6 @@ export default function App() {
           <span className="text-[9px] uppercase">Home</span>
         </button>
         <button 
-          className={`flex flex-col items-center gap-0.5 ${step === "analytics" ? "text-brand-600 font-bold" : "text-zinc-400"}`}
-          onClick={() => navigateToStep("analytics")}
-        >
-          <BarChart3 className="h-5 w-5" />
-          <span className="text-[9px] uppercase">Analytics</span>
-        </button>
-        <button 
           className="w-12 h-12 bg-zinc-900 text-white rounded-full flex items-center justify-center -mt-8 shadow-xl shadow-zinc-900/20 border-4 border-white disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={handleNewDocument}
         >
@@ -11859,8 +11713,9 @@ export default function App() {
         }}
       />
 
-      {/* Vercel Web Analytics */}
+      {/* Vercel Web Analytics & Speed Insights */}
       <Analytics />
+      <SpeedInsights />
     </div>
   );
 }

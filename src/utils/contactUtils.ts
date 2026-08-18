@@ -1,5 +1,5 @@
 import { db, auth } from "../services/firebase";
-import { collection, query, where, getDocs, addDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, addDoc, doc, deleteDoc } from "firebase/firestore";
 
 export interface ContactEntity {
   id?: string;
@@ -116,9 +116,8 @@ export const deleteUserContact = async (userId: string, contactId: string) => {
   if (!currentUid || !contactId || !db) return;
 
   try {
-    const { doc, deleteDoc: firestoreDeleteDoc } = await import("firebase/firestore");
     const contactRef = doc(db, 'contacts', contactId);
-    await firestoreDeleteDoc(contactRef);
+    await deleteDoc(contactRef);
   } catch (error) {
     console.warn(`[Contacts] Error deleting contact ${contactId} for user ${currentUid}:`, error);
   }

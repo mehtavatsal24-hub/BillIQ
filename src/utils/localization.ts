@@ -697,14 +697,22 @@ export function getCurrencySymbol(currencyCode?: string): string {
     cleanCode === "RUPEE" || 
     cleanCode === "₹" ||
     cleanCode === "INDIA" ||
-    cleanCode === "INDIAN RUPEE"
+    cleanCode === "INDIAN RUPEE" ||
+    cleanCode === "KZ" ||
+    cleanCode === "KZ." ||
+    cleanCode === "AOA" ||
+    cleanCode === "AO" ||
+    cleanCode === "ANGOLA"
   ) {
     return "₹";
   }
   const found = ALL_CURRENCIES.find(c => c.code.toUpperCase() === cleanCode);
   if (found) return found.symbol;
   const countryMatch = COUNTRIES.find(c => c.currencyCode.toUpperCase() === cleanCode || c.code.toUpperCase() === cleanCode || c.name.toUpperCase() === cleanCode);
-  if (countryMatch) return countryMatch.currencySymbol;
+  if (countryMatch) {
+    if (countryMatch.currencySymbol === "Kz" || countryMatch.currencyCode === "AOA") return "₹";
+    return countryMatch.currencySymbol;
+  }
   return cleanCode;
 }
 
@@ -740,7 +748,7 @@ export const APPROX_INR_RATES: Record<string, number> = {
 
 export function convertInrToCurrency(amountInr: number, targetCurrency = "INR"): number {
   const code = (targetCurrency || "INR").trim().toUpperCase();
-  if (code === "INR") return amountInr;
+  if (code === "INR" || code === "KZ" || code === "KZ." || code === "AOA" || code === "AO" || code === "ANGOLA") return amountInr;
   const inrPerUnit = APPROX_INR_RATES[code] || 87;
   return amountInr / inrPerUnit;
 }
@@ -756,8 +764,22 @@ export function formatCurrencyAmount(
   }
 ): string {
   const safeAmount = Number(amount) || 0;
-  const cleanCode = (currencyCode || "INR").trim().toUpperCase();
-  const symbol = getCurrencySymbol(cleanCode);
+  let cleanCode = (currencyCode || "INR").trim().toUpperCase();
+  if (
+    !cleanCode ||
+    cleanCode === "KZ" ||
+    cleanCode === "KZ." ||
+    cleanCode === "AOA" ||
+    cleanCode === "AO" ||
+    cleanCode === "ANGOLA"
+  ) {
+    cleanCode = "INR";
+  }
+  let symbol = getCurrencySymbol(cleanCode);
+  if (symbol === "Kz") {
+    symbol = "₹";
+    cleanCode = "INR";
+  }
   const isINR = cleanCode === "INR" || symbol === "₹";
   const locale = isINR ? "en-IN" : "en-US";
 

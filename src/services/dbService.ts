@@ -1,6 +1,6 @@
 import { doc, setDoc, getDoc, collection, getDocs, deleteDoc, onSnapshot, query, where } from "firebase/firestore";
 import { db, auth, isConfigValid } from "./firebase";
-import { updateTrialLedger } from "./trialService";
+import { updateTrialLedger, deleteTrialLedger } from "./trialService";
 import { safeLocalStorageSet } from "../utils/storageUtils";
 
 export enum OperationType {
@@ -769,19 +769,12 @@ export const deleteUserAccount = async (userId: string) => {
     const currentAuthEmail = auth?.currentUser?.email || "";
     const targetEmail = userEmail || (auth?.currentUser?.uid === userId ? currentAuthEmail : "");
 
-    // Permanently mark trial ledger as exhausted for this email address so re-registration cannot reuse trial
+    // Remove trial ledger for this email so when they re-sign up they start completely fresh as a new account
     if (targetEmail) {
       try {
-        await updateTrialLedger(targetEmail, {
-          trialUsed: true,
-          documentsRemaining: 0,
-          planTier: "expired",
-          planName: "Trial Expired",
-          isReRegisteredUser: true,
-          updatedAt: new Date().toISOString()
-        });
+        await deleteTrialLedger(targetEmail);
       } catch (e) {
-        console.warn("Trial ledger update on account deletion notice:", e);
+        console.warn("Trial ledger delete on account deletion notice:", e);
       }
     }
 
