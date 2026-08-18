@@ -33,15 +33,18 @@ export const CustomerSelector = ({
 
   const entityType = label.toLowerCase().includes("supplier") ? "Supplier" : "Customer";
 
+  const effectiveUserId = currentUserId || (typeof window !== "undefined" && (window as any).__CURRENT_USER_CONTEXT__?.userId) || undefined;
+
   useEffect(() => {
     setSearchTerm(currentValue);
   }, [currentValue]);
 
   const filteredCustomers = customers.filter((c: any) => {
-    if (currentUserId && c.userId && c.userId !== currentUserId) return false;
-    if (!searchTerm || searchTerm === currentValue) return true;
+    // If contact has a userId that doesn't match current active user, strictly omit
+    if (effectiveUserId && c.userId && c.userId !== effectiveUserId) return false;
+    if (!searchTerm || searchTerm.trim() === currentValue.trim()) return true;
     const name = (c.name || "").toLowerCase();
-    const term = (searchTerm || "").toLowerCase();
+    const term = (searchTerm || "").toLowerCase().trim();
     return name.includes(term);
   });
 
@@ -75,12 +78,12 @@ export const CustomerSelector = ({
         <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? "rotate-180" : ""}`} />
       </div>
 
-      {!disabled && isOpen && (filteredCustomers.length > 0 || searchTerm.length > 0) && (
+      {!disabled && isOpen && (filteredCustomers.length > 0 || (searchTerm && searchTerm.trim().length > 0)) && (
         <div className="absolute z-50 left-0 right-0 w-full mt-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto py-1 divide-y divide-zinc-100 dark:divide-zinc-800 animate-in fade-in slide-in-from-top-1 duration-150">
           {filteredCustomers.length > 0 ? (
             filteredCustomers.map((customer) => (
               <button
-                key={customer.id}
+                key={customer.id || `${customer.name}-${customer.gstin}`}
                 type="button"
                 className="w-full px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-slate-800 cursor-pointer flex items-center justify-between group transition-colors"
                 onClick={() => {
@@ -96,18 +99,20 @@ export const CustomerSelector = ({
               </button>
             ))
           ) : (
-            <div className="p-3 text-center text-sm text-gray-500 dark:text-gray-400 bg-slate-900/90 border border-slate-700 rounded-md">
+            <div className="p-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
               <p>No matching {entityType.toLowerCase()} found</p>
-              <button
-                type="button"
-                onClick={() => {
-                  if (onAddNew) onAddNew();
-                  setIsOpen(false);
-                }}
-                className="mt-2 text-xs bg-indigo-600 hover:bg-indigo-700 text-white py-1 px-3 rounded inline-flex items-center gap-1 transition-colors"
-              >
-                + Add as New {entityType}
-              </button>
+              {onAddNew && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onAddNew) onAddNew();
+                    setIsOpen(false);
+                  }}
+                  className="mt-2 text-xs bg-indigo-600 hover:bg-indigo-700 text-white py-1 px-3 rounded-lg inline-flex items-center gap-1 transition-colors"
+                >
+                  + Add as New {entityType}
+                </button>
+              )}
             </div>
           )}
         </div>

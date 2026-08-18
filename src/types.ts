@@ -109,18 +109,27 @@ export interface SavedSupplier extends CustomerDetails {
 
 export interface DocumentHistoryItem {
   id: string;
+  documentNumber?: string;
   timestamp: number;
-  type: DocumentType;
+  type: DocumentType | string;
   date: string;
+  createdAt?: string;
+  partyName?: string;
   customerName: string;
   customerCountry?: string;
   total: number;
+  totalAmount?: number;
   inrTotal?: number;
   currency?: string;
+  lineItemsCount?: number;
+  itemsCount?: number;
+  status?: string;
   fullData?: InvoiceData;
   paymentStatus?: "pending" | "paid" | "overdue" | "due_soon";
   dueDate?: string;
   editCount?: number;
+  userId?: string;
+  updatedAt?: string;
 }
 
 export interface LineItem {
@@ -156,6 +165,38 @@ export interface LineItem {
   supplierAmounts?: Record<string, number>;
   supplierTypeValues?: Record<string, number>;
   isAiEdited?: boolean;
+  // MTC & Inspection test properties
+  materialGrade?: string;
+  standard?: string;
+  c?: string;
+  mn?: string;
+  si?: string;
+  p?: string;
+  s?: string;
+  cr?: string;
+  ni?: string;
+  mo?: string;
+  cu?: string;
+  n?: string;
+  v?: string;
+  w?: string;
+  ti?: string;
+  al?: string;
+  nb?: string;
+  co?: string;
+  fe?: string;
+  yieldStrength?: string;
+  tensileStrength?: string;
+  elongation?: string;
+  reductionOfArea?: string;
+  hardness?: string;
+  impactTemp?: string;
+  impactValues?: string;
+  impactAvg?: string;
+  microstructure?: string;
+  grainSize?: string;
+  inclusionRating?: string;
+  heatTreatment?: string;
 }
 
 export interface InspectionParameter {

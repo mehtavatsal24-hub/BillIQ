@@ -1,6 +1,7 @@
 import { doc, setDoc, getDoc, collection, getDocs, deleteDoc, onSnapshot, query, where } from "firebase/firestore";
 import { db, auth, isConfigValid } from "./firebase";
 import { updateTrialLedger } from "./trialService";
+import { safeLocalStorageSet } from "../utils/storageUtils";
 
 export enum OperationType {
   CREATE = 'create',
@@ -238,6 +239,212 @@ export const getUserDocumentsFromCloud = async (userId?: string): Promise<any[]>
   return results;
 };
 
+/**
+ * Sanitizes a document ID for safe use in Firestore subcollection paths (avoiding path separator slashes).
+ */
+export const getSafeFirestoreDocId = (id: string, timestamp?: number): string => {
+  const safeId = (id || "doc").replace(/[\/\\]/g, "_").replace(/[^a-zA-Z0-9_\-\.]/g, "_");
+  return timestamp ? `${safeId}_${timestamp}` : safeId;
+};
+
+/**
+ * Saves a single document record to Firebase Firestore under the user's subcollection
+ * users/{userId}/documents/{safeDocId} and synchronizes with local storage.
+ * Ensures the saved schema includes: id, documentNumber, type, partyName, customerName,
+ * customerCountry, date, createdAt, timestamp, totalAmount, total, inrTotal, currency,
+ * lineItemsCount, itemsCount, status, paymentStatus, editCount, fullData, and userId.
+ */
+export const saveDocumentRecordToCloud = async (userId: string, docItem: any): Promise<boolean> => {
+  if (!userId || !docItem) return false;
+
+  const timestamp = docItem.timestamp || Date.now();
+  const safeDocId = getSafeFirestoreDocId(docItem.id || docItem.documentNumber || "DOC", timestamp);
+  const isoDate = docItem.createdAt || (docItem.date ? new Date(docItem.date).toISOString() : new Date().toISOString());
+
+  const standardizedDoc = {
+    ...docItem,
+    id: docItem.id || docItem.documentNumber || "DOC",
+    documentNumber: docItem.id || docItem.documentNumber || "DOC",
+    type: docItem.type || "Tax Invoice",
+    partyName: docItem.partyName || docItem.customerName || "Customer",
+    customerName: docItem.partyName || docItem.customerName || "Customer",
+    customerCountry: docItem.customerCountry || docItem.country || "",
+    date: docItem.date || new Date().toISOString().split("T")[0],
+    createdAt: isoDate,
+    timestamp: timestamp,
+    totalAmount: typeof docItem.totalAmount === "number" ? docItem.totalAmount : (docItem.total || 0),
+    total: typeof docItem.total === "number" ? docItem.total : (docItem.totalAmount || 0),
+    inrTotal: docItem.inrTotal || docItem.total || 0,
+    currency: docItem.currency || "INR",
+    lineItemsCount: docItem.lineItemsCount ?? (Array.isArray(docItem.fullData?.items) ? docItem.fullData.items.length : 0),
+    itemsCount: docItem.itemsCount ?? (Array.isArray(docItem.fullData?.items) ? docItem.fullData.items.length : 0),
+    status: docItem.status || (docItem.paymentStatus === "paid" ? "Paid" : "Issued"),
+    paymentStatus: docItem.paymentStatus || "pending",
+    editCount: docItem.editCount || 0,
+    userId: userId,
+    updatedAt: new Date().toISOString(),
+  };
+
+  // Local storage save first for immediate offline persistence
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      const storageKey = `billiq_user_${userId}_document_history`;
+      const currentRaw = localStorage.getItem(storageKey) || localStorage.getItem("document_history");
+      let currentList: any[] = [];
+      if (currentRaw) {
+        try { currentList = JSON.parse(currentRaw) || []; } catch {}
+      }
+      const existingIdx = currentList.findIndex(d => (String(d.timestamp) === String(timestamp)) || (d.id === standardizedDoc.id && d.type === standardizedDoc.type));
+      if (existingIdx !== -1) {
+        currentList[existingIdx] = standardizedDoc;
+      } else {
+        currentList = [standardizedDoc, ...currentList];
+      }
+      safeLocalStorageSet(storageKey, currentList);
+      safeLocalStorageSet("document_history", currentList);
+    } catch (e) {
+      console.warn("Notice updating local storage document history:", e);
+    }
+  }
+
+  // Trigger First Document Creation Follow-up tracking in background
+  try {
+    const currentUser = auth?.currentUser;
+    const userEmail = currentUser?.email || "";
+    const username = currentUser?.displayName || (userEmail ? userEmail.split("@")[0] : "User");
+    fetch("/api/track-first-document", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId,
+        email: userEmail,
+        username,
+        documentsCount: 1,
+      }),
+    }).catch(() => {});
+  } catch (e) {}
+
+  if (isConfigValid && db) {
+    try {
+      const sanitized = removeUndefined(standardizedDoc);
+      // 1. Write to subcollection users/{userId}/documents/{safeDocId}
+      const userDocRef = doc(db, "users", userId, "documents", safeDocId);
+      await setDoc(userDocRef, sanitized, { merge: true });
+
+      // 2. Also write to root documents collection partitioned by userId if rules allow
+      try {
+        const rootDocRef = doc(db, "documents", `${userId}_${safeDocId}`);
+        await setDoc(rootDocRef, sanitized, { merge: true });
+      } catch (rootErr) {
+        // Safe to ignore if root write is denied
+      }
+
+      return true;
+    } catch (error) {
+      if (isTransientOrShutdownError(error)) {
+        console.warn(`Firestore document save deferred for ${safeDocId}.`);
+        return false;
+      }
+      console.warn(`Notice persisting document ${safeDocId} to cloud (saved locally):`, error);
+      return false;
+    }
+  }
+
+  return true;
+};
+
+/**
+ * Deletes a single document record from Firebase Firestore under the user's subcollection
+ * users/{userId}/documents/{safeDocId}.
+ */
+export const deleteDocumentRecordFromCloud = async (userId: string, docId: string, timestamp?: number): Promise<boolean> => {
+  if (!userId || !docId) return false;
+  const safeDocId = getSafeFirestoreDocId(docId, timestamp);
+  if (isConfigValid && db) {
+    try {
+      const docRef = doc(db, "users", userId, "documents", safeDocId);
+      await deleteDoc(docRef);
+      try {
+        const rootDocRef = doc(db, "documents", `${userId}_${safeDocId}`);
+        await deleteDoc(rootDocRef);
+      } catch {}
+      return true;
+    } catch (err) {
+      console.warn("Notice deleting document from subcollection:", err);
+      return false;
+    }
+  }
+  return true;
+};
+
+/**
+ * Attaches a real-time listener for user documents in the subcollection users/{userId}/documents.
+ * Fires immediately with the latest documents sorted by timestamp/createdAt descending.
+ */
+export const subscribeToUserDocuments = (
+  userId: string,
+  onDocuments: (docs: any[]) => void,
+  onError?: (error: any) => void
+) => {
+  if (!isConfigValid || !db || !userId) return () => {};
+
+  let isUnsubscribed = false;
+  const userDocsCol = collection(db, "users", userId, "documents");
+
+  const unsubscribe = onSnapshot(
+    userDocsCol,
+    (snapshot) => {
+      if (isUnsubscribed) return;
+      const cloudDocs: any[] = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data() as any;
+        if (data) {
+          cloudDocs.push({
+            id: data.id || docSnap.id,
+            documentNumber: data.documentNumber || data.id || docSnap.id,
+            type: data.type || "Tax Invoice",
+            date: data.date || "",
+            createdAt: data.createdAt || data.date,
+            customerName: data.partyName || data.customerName || "Customer",
+            partyName: data.partyName || data.customerName || "Customer",
+            customerCountry: data.customerCountry || "",
+            total: typeof data.total === "number" ? data.total : (data.totalAmount || 0),
+            totalAmount: typeof data.totalAmount === "number" ? data.totalAmount : (data.total || 0),
+            inrTotal: data.inrTotal || data.total || 0,
+            currency: data.currency || "INR",
+            lineItemsCount: data.lineItemsCount ?? (Array.isArray(data.fullData?.items) ? data.fullData.items.length : 0),
+            status: data.status || (data.paymentStatus === "paid" ? "Paid" : "Issued"),
+            fullData: data.fullData,
+            paymentStatus: data.paymentStatus || "pending",
+            dueDate: data.dueDate,
+            editCount: data.editCount || 0,
+            timestamp: data.timestamp || Date.now(),
+            userId: userId,
+          });
+        }
+      });
+
+      if (cloudDocs.length > 0) {
+        cloudDocs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        onDocuments(cloudDocs);
+      }
+    },
+    (error) => {
+      if (isTransientOrShutdownError(error)) {
+        console.warn(`Firestore documents subcollection notice for user ${userId}:`, error instanceof Error ? error.message : String(error));
+        return;
+      }
+      console.warn(`Firestore real-time documents subcollection error for user ${userId}:`, error);
+      if (onError) onError(error);
+    }
+  );
+
+  return () => {
+    isUnsubscribed = true;
+    unsubscribe();
+  };
+};
+
 export const getLocalCachedDocuments = (userId?: string): any[] => {
   const targetUid = userId || auth?.currentUser?.uid;
   if (typeof window === "undefined" || !window.localStorage) return [];
@@ -415,15 +622,19 @@ export const mergeLocalDataWithFirestore = async (userId: string, userEmail?: st
 
   // 3. Merge Business Details
   const remoteBusiness = remoteData.business || {};
-  const bizName = remoteBusiness.name || remoteBusiness.companyName || localBusiness.name || localBusiness.companyName || "";
+  const bizName = localBusiness.name || localBusiness.companyName || remoteBusiness.name || remoteBusiness.companyName || "";
+  const bizCountry = localBusiness.country || remoteBusiness.country || "India";
+  const bizCurrency = localBusiness.currency || remoteBusiness.currency || "INR";
   const mergedBusiness = {
-    ...localBusiness,
     ...remoteBusiness,
+    ...localBusiness,
     name: bizName,
     companyName: bizName,
-    letterhead: remoteBusiness.letterhead || localBusiness.letterhead,
-    logo: remoteBusiness.logo || localBusiness.logo,
-    signature: remoteBusiness.signature || localBusiness.signature,
+    country: bizCountry,
+    currency: bizCurrency,
+    letterhead: localBusiness.letterhead || remoteBusiness.letterhead,
+    logo: localBusiness.logo || remoteBusiness.logo,
+    signature: localBusiness.signature || remoteBusiness.signature,
   };
 
   // 4. Merge Saved Customers & Suppliers

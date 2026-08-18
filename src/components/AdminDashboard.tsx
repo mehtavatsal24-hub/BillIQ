@@ -46,8 +46,10 @@ import {
   Wrench,
   Sparkles,
   RotateCcw,
-  CheckCircle2
+  CheckCircle2,
+  Activity
 } from "lucide-react";
+import { LiveAnalyticsDashboard } from "./LiveAnalyticsDashboard";
 import {
   ResponsiveContainer,
   BarChart,
@@ -66,6 +68,7 @@ import { generateInvoicePDF, downloadInvoicePDF } from "../services/pdfService";
 import { AuditLogEntry, getUserAuditLogs, logUserActivity } from "../services/auditLogger";
 import { InvoiceData, DocumentType, BusinessDetails, CustomerDetails, LineItem, PDFLayoutSettings, UserOverrides, UserOverrideAuditLog } from "../types";
 import { sendFeedbackRequestEmails, sendInactivityReminders, sendBroadcastEmail } from "../services/emailService";
+import { triggerFirstDocFollowupRequests, trigger3DayInactivityEmails } from "../services/emailCampaigns";
 
 interface AdminDashboardProps {
   adminUser: any;
@@ -73,6 +76,7 @@ interface AdminDashboardProps {
   onExitAdminView?: () => void;
   currentUserHistory?: any[];
   onUserUpdated?: (user: any) => void;
+  currency?: string;
 }
 
 // Helper function to reliably normalize any timestamp/date input into a local YYYY-MM-DD string
@@ -167,13 +171,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onExitAdminView,
   currentUserHistory,
   onUserUpdated,
+  currency = "INR",
 }) => {
+  const safeCurrency = !currency || currency.trim().toUpperCase() === "AOA" ? "INR" : currency.trim().toUpperCase();
   const [usersList, setUsersList] = useState<any[]>([]);
   const [loadingUsers, setLoadingUsers] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [planFilter, setPlanFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<string>("date-desc");
+  const [activityFilter, setActivityFilter] = useState<string>("all");
+  const [customFilterDate, setCustomFilterDate] = useState<string>("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "documents" | "overrides" | "logs" | "notes">("overview");
 
@@ -235,6 +243,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     amount: 0,
     notes: "",
   });
+
+  const [adminMainTab, setAdminMainTab] = useState<"live_pulse" | "user_directory" | "campaigns" | "growth">("live_pulse");
+
+  const allDocuments = useMemo(() => {
+    const docs: any[] = [];
+    usersList.forEach((u) => {
+      if (Array.isArray(u.history)) {
+        docs.push(...u.history);
+      } else if (Array.isArray(u.documents)) {
+        docs.push(...u.documents);
+      }
+    });
+    if (Array.isArray(currentUserHistory)) {
+      currentUserHistory.forEach((d) => {
+        if (!docs.some((existing) => existing.id === d.id)) {
+          docs.push(d);
+        }
+      });
+    }
+    return docs;
+  }, [usersList, currentUserHistory]);
 
   const [isNewUserModalOpen, setIsNewUserModalOpen] = useState<boolean>(false);
   const [newUserForm, setNewUserForm] = useState({
@@ -304,21 +333,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [broadcastRecipientTarget, setBroadcastRecipientTarget] = useState<"all" | "active" | "inactive">("all");
   const [emailCampaignLog, setEmailCampaignLog] = useState<{ id: string; time: string; text: string; success: boolean }[]>([]);
 
+  // New Sign-ups & Sign-ins Summary Component State
+  const [summaryDateFilter, setSummaryDateFilter] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+  const [summaryRangeType, setSummaryRangeType] = useState<"today" | "yesterday" | "7d" | "30d" | "custom">("today");
+  const [summaryActivityTab, setSummaryActivityTab] = useState<"all" | "signups" | "signins">("all");
+  const [summaryStatusFilter, setSummaryStatusFilter] = useState<string>("all");
+
   const handleTriggerFeedbackRequests = async () => {
     setTriggeringFeedback(true);
     try {
-      const res = await sendFeedbackRequestEmails();
+      const res = await triggerFirstDocFollowupRequests(usersList);
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const logItem = {
         id: String(Date.now()),
         time: timeStr,
-        text: res.message || `Dispatched 2-day feedback requests to ${res.count} user(s).`,
+        text: res.message || `Dispatched 1st document follow-ups to ${res.count} user(s).`,
         success: res.success,
       };
       setEmailCampaignLog((prev) => [logItem, ...prev]);
       showAdminToast(res.message, res.success ? "success" : "error");
     } catch (e: any) {
-      showAdminToast(e?.message || "Failed to trigger feedback emails.", "error");
+      showAdminToast(e?.message || "Failed to trigger 1st document follow-up emails.", "error");
     } finally {
       setTriggeringFeedback(false);
     }
@@ -327,18 +365,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleTriggerInactivityReminders = async () => {
     setTriggeringInactivity(true);
     try {
-      const res = await sendInactivityReminders();
+      const res = await trigger3DayInactivityEmails(usersList);
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const logItem = {
         id: String(Date.now()),
         time: timeStr,
-        text: res.message || `Dispatched 14-day inactivity reminders to ${res.count} user(s).`,
+        text: res.message || `Dispatched 3-day inactivity reminders to ${res.count} user(s).`,
         success: res.success,
       };
       setEmailCampaignLog((prev) => [logItem, ...prev]);
       showAdminToast(res.message, res.success ? "success" : "error");
     } catch (e: any) {
-      showAdminToast(e?.message || "Failed to trigger inactivity reminders.", "error");
+      showAdminToast(e?.message || "Failed to trigger 3-day inactivity reminders.", "error");
     } finally {
       setTriggeringInactivity(false);
     }
@@ -625,6 +663,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return usersList.length;
   }, [usersList]);
 
+  // Today & Yesterday Local Date Strings (YYYY-MM-DD)
+  const todayDateStr = useMemo(() => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }, []);
+
+  const yesterdayDateStr = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }, []);
+
+  // New Signups of the Day (Accounts created today)
+  const signupsTodayCount = useMemo(() => {
+    return usersList.filter((u) => {
+      const rawCreated = u.createdAt || u.registrationDate || u.created_at;
+      return rawCreated ? toLocalDateString(rawCreated) === todayDateStr : false;
+    }).length;
+  }, [usersList, todayDateStr]);
+
+  // Sign-Ins / Logins of the Day (Users who signed in or visited today)
+  const signInsTodayCount = useMemo(() => {
+    return usersList.filter((u) => {
+      const lastLogin = u.lastLoginAt || u.lastLogin || u.lastActiveAt || u.lastActive;
+      return lastLogin ? toLocalDateString(lastLogin) === todayDateStr : false;
+    }).length;
+  }, [usersList, todayDateStr]);
+
+  // Users Inactive for > 3 Days (Eligible for automated 3-day inactivity campaign)
+  const inactive3DaysCount = useMemo(() => {
+    const threeDaysAgoTime = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    return usersList.filter((u) => {
+      const timestamps = [u.lastActiveAt, u.lastActive, u.lastLoginAt, u.lastSeen, u.updatedAt, u.createdAt];
+      let maxTime = 0;
+      for (const ts of timestamps) {
+        if (ts) {
+          const t = new Date(ts).getTime();
+          if (!isNaN(t) && t > maxTime) maxTime = t;
+        }
+      }
+      return maxTime > 0 && maxTime < threeDaysAgoTime;
+    }).length;
+  }, [usersList]);
+
   // Real-Time Active Users Metric (Users currently online & active within the last 5 minutes)
   const currentlyActiveUsersCount = useMemo(() => {
     const fiveMinutesAgoTime = Date.now() - 5 * 60 * 1000;
@@ -644,7 +732,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const onlineUsers = activeUsersList.filter((u) => {
       if (u.isOnline === false) return false;
 
-      const timestamps = [u.lastSeen, u.lastActive];
+      const timestamps = [u.lastSeen, u.lastActive, u.lastActiveAt];
       let maxTime = 0;
       for (const ts of timestamps) {
         if (ts) {
@@ -756,6 +844,97 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const total30DayDocs = useMemo(() => {
     return analytics30DaysData.reduce((acc, curr) => acc + curr.docs, 0);
   }, [analytics30DaysData]);
+
+  // Breakdown metrics for the 'New Sign-ups & Sign-ins' summary component
+  const summaryMetricsData = useMemo(() => {
+    let targetDates: string[] = [];
+    const now = new Date();
+
+    if (summaryRangeType === "today") {
+      targetDates = [todayDateStr];
+    } else if (summaryRangeType === "yesterday") {
+      targetDates = [yesterdayDateStr];
+    } else if (summaryRangeType === "7d") {
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+        targetDates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+      }
+    } else if (summaryRangeType === "30d") {
+      for (let i = 0; i < 30; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+        targetDates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+      }
+    } else {
+      targetDates = summaryDateFilter ? [summaryDateFilter] : [todayDateStr];
+    }
+
+    const targetDateSet = new Set(targetDates);
+
+    const signups: any[] = [];
+    const signins: any[] = [];
+    let docsCount = 0;
+
+    usersList.forEach((u) => {
+      // Account Status Filter check
+      if (summaryStatusFilter !== "all") {
+        const status = (u.accountStatus || (u.isDeleted || u.status === "Deleted" ? "Deleted" : "Active")).toLowerCase();
+        if (summaryStatusFilter === "active" && status !== "active") return;
+        if (summaryStatusFilter === "suspended" && status !== "suspended") return;
+        if (summaryStatusFilter === "deleted" && status !== "deleted") return;
+      }
+
+      // Check Registration Date
+      const rawCreated = u.createdAt || u.registrationDate || u.created_at;
+      const regDate = rawCreated ? toLocalDateString(rawCreated) : "";
+      if (regDate && targetDateSet.has(regDate)) {
+        signups.push({
+          ...u,
+          activityType: "signup",
+          activityDate: rawCreated,
+          activityDateStr: regDate,
+        });
+      }
+
+      // Check Last Login Date
+      const rawLogin = u.lastLoginAt || u.lastLogin || u.lastActiveAt || u.lastActive;
+      const loginDate = rawLogin ? toLocalDateString(rawLogin) : "";
+      if (loginDate && targetDateSet.has(loginDate)) {
+        signins.push({
+          ...u,
+          activityType: "signin",
+          activityDate: rawLogin,
+          activityDateStr: loginDate,
+        });
+      }
+
+      // Check Documents Count created within this date range
+      if (Array.isArray(u.history)) {
+        u.history.forEach((docItem: any) => {
+          const docDate =
+            toLocalDateString(docItem.createdAt) ||
+            toLocalDateString(docItem.timestamp) ||
+            toLocalDateString(docItem.date);
+          if (docDate && targetDateSet.has(docDate)) {
+            docsCount++;
+          }
+        });
+      }
+    });
+
+    // Merged list for combined activity display
+    const combinedMap = new Map<string, any>();
+    signups.forEach((u) => combinedMap.set(`${u.id}_signup`, u));
+    signins.forEach((u) => combinedMap.set(`${u.id}_signin`, u));
+    const combinedList = Array.from(combinedMap.values());
+
+    return {
+      signups,
+      signins,
+      docsCount,
+      combinedList,
+      targetDates,
+    };
+  }, [usersList, summaryRangeType, summaryDateFilter, summaryStatusFilter, todayDateStr, yesterdayDateStr]);
 
   // Update local fields when selected user changes
   useEffect(() => {
@@ -1149,7 +1328,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       logUserActivity(adminUser?.uid, "Document Deleted", `Admin deleted document ${docIdToDelete} from user ${selectedUser.id}`, false, "document");
     } catch (err) {
       console.error("Failed to delete document:", err);
-      alert("Failed to delete document from Firestore cloud.");
+      alert("Failed to delete document from cloud backup.");
     }
   };
 
@@ -1282,7 +1461,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       logUserActivity(adminUser?.uid, "Document Saved", `Admin saved doc ${docForm.documentNumber} for user ${selectedUser.id}`, false, "document");
     } catch (err) {
       console.error("Failed to save document:", err);
-      alert("Failed to save document to Firestore.");
+      alert("Failed to save document.");
     }
   };
 
@@ -1335,7 +1514,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       logUserActivity(adminUser?.uid, "User Account Created", `Admin created user ${newUid} (${newUserForm.email})`, false, "auth");
     } catch (err) {
       console.error("Failed to create user:", err);
-      alert("Failed to save user account to Firestore.");
+      alert("Failed to create user account.");
     }
   };
 
@@ -1457,10 +1636,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setIsDeleteUserModalOpen(false);
       setUserToDelete(null);
       setDeleteAdminPassword("");
-      alert(`User account (${targetId}) was permanently deleted from Firestore.`);
+      alert(`User account (${targetId}) was permanently deleted.`);
     } catch (err: any) {
       console.error("Failed to delete user account:", err);
-      setDeletePasswordError("Failed to delete user account from Firestore: " + (err?.message || String(err)));
+      setDeletePasswordError("Failed to delete user account: " + (err?.message || String(err)));
     } finally {
       setIsDeletingUser(false);
     }
@@ -1554,6 +1733,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (isAdmin || p.includes("pro") || p.includes("enterprise")) return false;
         const isFreeTier = (p.includes("free") && !p.includes("trial")) || u.planTier === "free_tier" || u.planTier === "50";
         if (isFreeTier) return false;
+      }
+    }
+
+    // Activity Status & Day Filter
+    if (activityFilter !== "all") {
+      const rawCreated = u.createdAt || u.registrationDate || u.created_at;
+      const regDateStr = rawCreated ? toLocalDateString(rawCreated) : "";
+      
+      const lastLogin = u.lastLoginAt || u.lastLogin || u.lastActiveAt || u.lastActive;
+      const loginDateStr = lastLogin ? toLocalDateString(lastLogin) : "";
+
+      const rawLastActive = u.lastActiveAt || u.lastActive || u.lastSeen || u.updatedAt || u.createdAt;
+      const activeDateStr = rawLastActive ? toLocalDateString(rawLastActive) : "";
+      const lastActiveTime = rawLastActive ? new Date(rawLastActive).getTime() : 0;
+      const nowTime = Date.now();
+
+      if (activityFilter === "signups_today") {
+        if (regDateStr !== todayDateStr) return false;
+      } else if (activityFilter === "signins_today") {
+        if (loginDateStr !== todayDateStr) return false;
+      } else if (activityFilter === "online_now") {
+        if (!u.isOnline && u.isOnline !== undefined) return false;
+        const recentTime = Math.max(
+          u.lastSeen ? new Date(u.lastSeen).getTime() : 0,
+          u.lastActive ? new Date(u.lastActive).getTime() : 0,
+          u.lastActiveAt ? new Date(u.lastActiveAt).getTime() : 0
+        );
+        if (nowTime - recentTime > 5 * 60 * 1000) return false;
+      } else if (activityFilter === "active_today") {
+        if (activeDateStr !== todayDateStr && loginDateStr !== todayDateStr && regDateStr !== todayDateStr) return false;
+      } else if (activityFilter === "active_yesterday") {
+        if (activeDateStr !== yesterdayDateStr && loginDateStr !== yesterdayDateStr && regDateStr !== yesterdayDateStr) return false;
+      } else if (activityFilter === "active_7d") {
+        if (lastActiveTime === 0 || nowTime - lastActiveTime > 7 * 24 * 60 * 60 * 1000) return false;
+      } else if (activityFilter === "inactive_3d") {
+        if (lastActiveTime > 0 && nowTime - lastActiveTime <= 3 * 24 * 60 * 60 * 1000) return false;
+      } else if (activityFilter === "inactive_7d") {
+        if (lastActiveTime > 0 && nowTime - lastActiveTime <= 7 * 24 * 60 * 60 * 1000) return false;
+      } else if (activityFilter === "custom_date" && customFilterDate) {
+        const matchesCustom =
+          regDateStr === customFilterDate ||
+          loginDateStr === customFilterDate ||
+          activeDateStr === customFilterDate;
+        if (!matchesCustom) return false;
       }
     }
 
@@ -1714,13 +1937,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Grant Trial Credits directly to Selected User
-  const handleGrantTrialCredits = async (additionalCredits: number = 5) => {
-    if (!selectedUser) return;
+  // Grant Trial Credits directly to Selected User or any target user item
+  const handleGrantTrialCredits = async (targetUserOrCredits?: any, maybeCredits: number = 5) => {
+    let targetUser = selectedUser;
+    let additionalCredits = 5;
+
+    if (typeof targetUserOrCredits === "number") {
+      additionalCredits = targetUserOrCredits;
+    } else if (targetUserOrCredits && typeof targetUserOrCredits === "object") {
+      targetUser = targetUserOrCredits;
+      additionalCredits = maybeCredits || 5;
+    }
+
+    if (!targetUser) return;
     setSavingUserMeta(true);
     try {
-      const email = getUserEmail(selectedUser);
-      const result = await adminGrantTrialCredits(selectedUser.id, email, additionalCredits);
+      const email = getUserEmail(targetUser);
+      const adminEmail = adminUser?.email || "admin@billiq.ai";
+      const result = await adminGrantTrialCredits(targetUser.id, email, additionalCredits, undefined, adminEmail);
       
       const newPlanName = result.newTier === "enterprise" ? "Enterprise Admin" : result.newTier === "pro" ? "Pro Plan" : (result.newRemaining > 0 ? "Free Trial" : "Trial Expired");
       const isUnlimited = result.newTier === "enterprise" || result.newTier === "pro";
@@ -1728,8 +1962,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const maxDocsVal = isUnlimited ? 999999 : result.newRemaining;
 
       const updatedUser = {
-        ...selectedUser,
+        ...targetUser,
         documentsRemaining: result.newRemaining,
+        trialCreditsGranted: result.totalGranted,
+        trialExhausted: false,
         docQuota: docQuotaVal,
         maxDocs: maxDocsVal,
         planTier: result.newTier,
@@ -1738,13 +1974,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         updatedAt: new Date().toISOString(),
       };
 
-      setUsersList((prev) => prev.map((u) => (u.id === selectedUser.id ? updatedUser : u)));
-      setCurrentPlan(newPlanName);
+      setUsersList((prev) => prev.map((u) => (u.id === targetUser.id ? updatedUser : u)));
+      if (selectedUser?.id === targetUser.id) {
+        setCurrentPlan(newPlanName);
+      }
       if (onUserUpdated) {
         onUserUpdated(updatedUser);
       }
-      logUserActivity(adminUser?.uid, "Trial Credits Granted", `Granted +${additionalCredits} trial credits to user ${selectedUser.id} (${email})`, false, "system");
-      showAdminToast("User profile updated successfully", "success");
+      logUserActivity(adminUser?.uid, "Trial Credits Granted", `Admin granted +${additionalCredits} bonus trial credits to user ${targetUser.id} (${email})`, false, "system");
+      showAdminToast(`Successfully granted +${additionalCredits} trial credits to ${getUserUsername(targetUser)}! (Remaining: ${result.newRemaining})`, "success");
     } catch (e: any) {
       console.error("Failed to grant trial credits:", e);
       showAdminToast("Failed to grant trial credits: " + (e?.message || String(e)), "error");
@@ -2007,8 +2245,97 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Main Container */}
       <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 md:px-8 lg:px-12 pt-6">
-        {/* Platform Activity Overview Bar Graph */}
-            <div className="bg-zinc-950/80 border border-zinc-800 rounded-2xl p-5 mb-6 space-y-4">
+        
+        {/* Modern Admin Top Tab Switcher */}
+        <div className="flex flex-wrap items-center gap-2 mb-6 bg-zinc-950/90 p-1.5 rounded-2xl border border-zinc-800 shadow-xl backdrop-blur-md">
+          <button
+            type="button"
+            onClick={() => setAdminMainTab("live_pulse")}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2.5 ${
+              adminMainTab === "live_pulse"
+                ? "bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25 ring-1 ring-white/20"
+                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/80"
+            }`}
+          >
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </span>
+            <Activity className="w-4 h-4 text-emerald-300" />
+            <span className="tracking-wide">Live Pulse & Spend</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              INR ₹
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAdminMainTab("user_directory")}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              adminMainTab === "user_directory"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20 ring-1 ring-white/20"
+                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/80"
+            }`}
+          >
+            <Users className="w-4 h-4 text-sky-400" />
+            <span>User Directory & Inspector</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-zinc-800 text-zinc-300">
+              {usersList.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAdminMainTab("campaigns")}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              adminMainTab === "campaigns"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20 ring-1 ring-white/20"
+                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/80"
+            }`}
+          >
+            <Mail className="w-4 h-4 text-purple-400" />
+            <span>Email Campaigns & Dispatcher</span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              60s Active
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAdminMainTab("growth")}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              adminMainTab === "growth"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20 ring-1 ring-white/20"
+                : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/80"
+            }`}
+          >
+            <BarChart2 className="w-4 h-4 text-amber-400" />
+            <span>Growth & Document Telemetry</span>
+          </button>
+        </div>
+
+        {/* TAB 1: LIVE PULSE & SPEND DASHBOARD */}
+        {adminMainTab === "live_pulse" && (
+          <LiveAnalyticsDashboard
+            registeredUsers={usersList}
+            allDocuments={allDocuments}
+            currency={safeCurrency}
+            onInspectUser={(u) => {
+              setSelectedUserId(u.id);
+              setAdminMainTab("user_directory");
+            }}
+            onSendEmailToUser={(u) => {
+              setBroadcastRecipientTarget("all");
+              setBroadcastSubject(`Support update for ${u.displayName || u.email}`);
+              setShowBroadcastModal(true);
+            }}
+          />
+        )}
+
+        {/* Platform Activity Overview Bar Graph & Sign-ups Summary */}
+        {adminMainTab === "growth" && (
+        <div className="space-y-6">
+        <div className="bg-zinc-950/80 border border-zinc-800 rounded-2xl p-5 space-y-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-3 border-b border-zinc-800/80">
             <div className="flex items-center gap-2.5">
               <div className="p-2 bg-indigo-600/20 text-indigo-400 rounded-xl border border-indigo-500/30">
@@ -2024,27 +2351,74 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            {/* Total Registrations, Active Users & Total Docs Summary Metric Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs font-mono">
-              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl px-3 py-2 flex flex-col">
-                <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Total Registrations</span>
+            {/* Total Registrations, Daily Signups, Sign-Ins, Active Users & Total Docs Summary Metric Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs font-mono">
+              <div 
+                onClick={() => setActivityFilter("all")}
+                className={`border rounded-xl px-2.5 py-2 flex flex-col cursor-pointer transition-all ${
+                  activityFilter === "all" ? "bg-indigo-950/60 border-indigo-500/80 ring-1 ring-indigo-500/50" : "bg-zinc-900/90 border-zinc-800 hover:border-zinc-700"
+                }`}
+                title="View All Users"
+              >
+                <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Total Users</span>
                 <span className="text-base font-black text-indigo-400 mt-0.5">{totalRegistrations}</span>
               </div>
-              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl px-3 py-2 flex flex-col">
-                <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Active Users (30d)</span>
-                <span className="text-base font-black text-blue-400 mt-0.5">{currentlyActiveUsersCount}</span>
+
+              <div 
+                onClick={() => setActivityFilter("signups_today")}
+                className={`border rounded-xl px-2.5 py-2 flex flex-col cursor-pointer transition-all ${
+                  activityFilter === "signups_today" ? "bg-purple-950/60 border-purple-500/80 ring-1 ring-purple-500/50" : "bg-zinc-900/90 border-zinc-800 hover:border-zinc-700"
+                }`}
+                title="Filter: New Signups Today"
+              >
+                <span className="text-[10px] text-purple-300 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-purple-400" /> Signups Today
+                </span>
+                <span className="text-base font-black text-purple-400 mt-0.5">+{signupsTodayCount}</span>
               </div>
-              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl px-3 py-2 flex flex-col">
-                <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Total Docs Created</span>
-                <span className="text-base font-black text-emerald-400 mt-0.5">{totalDocsCreated}</span>
+
+              <div 
+                onClick={() => setActivityFilter("signins_today")}
+                className={`border rounded-xl px-2.5 py-2 flex flex-col cursor-pointer transition-all ${
+                  activityFilter === "signins_today" ? "bg-sky-950/60 border-sky-500/80 ring-1 ring-sky-500/50" : "bg-zinc-900/90 border-zinc-800 hover:border-zinc-700"
+                }`}
+                title="Filter: Users Logged In / Visited Today"
+              >
+                <span className="text-[10px] text-sky-300 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  <Key className="w-3 h-3 text-sky-400" /> Sign-Ins Today
+                </span>
+                <span className="text-base font-black text-sky-400 mt-0.5">{signInsTodayCount}</span>
               </div>
-              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl px-3 py-2 flex flex-col">
-                <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">30d New Users</span>
-                <span className="text-base font-extrabold text-indigo-300 mt-0.5">+{total30DayRegistrations}</span>
+
+              <div 
+                onClick={() => setActivityFilter("online_now")}
+                className={`border rounded-xl px-2.5 py-2 flex flex-col cursor-pointer transition-all ${
+                  activityFilter === "online_now" ? "bg-emerald-950/60 border-emerald-500/80 ring-1 ring-emerald-500/50" : "bg-zinc-900/90 border-zinc-800 hover:border-zinc-700"
+                }`}
+                title="Filter: Online Now (Active in last 5 minutes)"
+              >
+                <span className="text-[10px] text-emerald-300 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Online (5m)
+                </span>
+                <span className="text-base font-black text-emerald-400 mt-0.5">{currentlyActiveUsersCount}</span>
               </div>
-              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl px-3 py-2 flex flex-col">
-                <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">30d New Docs</span>
-                <span className="text-base font-extrabold text-emerald-300 mt-0.5">+{total30DayDocs}</span>
+
+              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl px-2.5 py-2 flex flex-col">
+                <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Total Docs</span>
+                <span className="text-base font-black text-teal-400 mt-0.5">{totalDocsCreated}</span>
+              </div>
+
+              <div 
+                onClick={() => setActivityFilter("inactive_3d")}
+                className={`border rounded-xl px-2.5 py-2 flex flex-col cursor-pointer transition-all ${
+                  activityFilter === "inactive_3d" ? "bg-amber-950/60 border-amber-500/80 ring-1 ring-amber-500/50" : "bg-zinc-900/90 border-zinc-800 hover:border-zinc-700"
+                }`}
+                title="Filter: Users Inactive > 3 Days"
+              >
+                <span className="text-[10px] text-amber-300 uppercase tracking-wider font-semibold flex items-center gap-1">
+                  <Clock className="w-3 h-3 text-amber-400" /> Inactive (&gt;3d)
+                </span>
+                <span className="text-base font-black text-amber-400 mt-0.5">{inactive3DaysCount}</span>
               </div>
             </div>
           </div>
@@ -2063,7 +2437,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <YAxis 
                   stroke="#71717a" 
                   fontSize={11} 
-                  tickLine={false}
+                  tickLine={false} 
                   axisLine={{ stroke: '#27272a' }}
                   allowDecimals={false}
                 />
@@ -2099,7 +2473,356 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Automated Email Campaigns & Resend Dispatcher Card */}
+        {/* NEW SIGN-UPS & SIGN-INS ACTIVITY TRACKER SUMMARY COMPONENT */}
+        <div className="bg-zinc-950/80 border border-zinc-800 rounded-2xl p-5 mb-6 space-y-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-3 border-b border-zinc-800/80">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-purple-600/20 text-purple-400 rounded-xl border border-purple-500/30">
+                <Users className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2 flex-wrap">
+                  New Sign-ups & Sign-ins Summary
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    Activity & Audit Tracker
+                  </span>
+                </h2>
+                <p className="text-xs text-zinc-400">
+                  Separate tracking for daily user registrations and login sessions with date filtering & direct credit controls
+                </p>
+              </div>
+            </div>
+
+            {/* Date Preset Chips & Custom Date Picker */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center bg-zinc-900 p-1 rounded-xl border border-zinc-800 text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSummaryRangeType("today");
+                    setSummaryDateFilter(todayDateStr);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-all cursor-pointer ${
+                    summaryRangeType === "today"
+                      ? "bg-purple-600 text-white shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSummaryRangeType("yesterday");
+                    setSummaryDateFilter(yesterdayDateStr);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-all cursor-pointer ${
+                    summaryRangeType === "yesterday"
+                      ? "bg-purple-600 text-white shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Yesterday
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSummaryRangeType("7d")}
+                  className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-all cursor-pointer ${
+                    summaryRangeType === "7d"
+                      ? "bg-purple-600 text-white shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Last 7 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSummaryRangeType("30d")}
+                  className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-all cursor-pointer ${
+                    summaryRangeType === "30d"
+                      ? "bg-purple-600 text-white shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Last 30 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSummaryRangeType("custom")}
+                  className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-all cursor-pointer flex items-center gap-1 ${
+                    summaryRangeType === "custom"
+                      ? "bg-purple-600 text-white shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <Calendar className="w-3 h-3" />
+                  Custom
+                </button>
+              </div>
+
+              {summaryRangeType === "custom" && (
+                <div className="flex items-center gap-1 bg-zinc-900 px-2.5 py-1 rounded-xl border border-purple-500/60">
+                  <span className="text-[11px] text-zinc-400 font-semibold">Date:</span>
+                  <input
+                    type="date"
+                    value={summaryDateFilter}
+                    onChange={(e) => setSummaryDateFilter(e.target.value)}
+                    className="bg-transparent text-white text-xs font-mono focus:outline-none cursor-pointer"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Metric Summary Cards for Selected Date Filter */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3.5 bg-gradient-to-br from-purple-950/50 to-zinc-900/90 border border-purple-800/40 rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  New Registrations
+                </span>
+                <span className="text-[10px] font-semibold text-purple-400 bg-purple-950/80 border border-purple-800/60 px-1.5 py-0.5 rounded">
+                  Sign-ups
+                </span>
+              </div>
+              <div className="text-2xl font-black text-white font-mono flex items-baseline gap-1">
+                <span>{summaryMetricsData.signups.length}</span>
+                <span className="text-xs text-zinc-400 font-normal">users registered</span>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-gradient-to-br from-sky-950/50 to-zinc-900/90 border border-sky-800/40 rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-sky-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-sky-400" />
+                  Daily Sign-Ins
+                </span>
+                <span className="text-[10px] font-semibold text-sky-400 bg-sky-950/80 border border-sky-800/60 px-1.5 py-0.5 rounded">
+                  Logins
+                </span>
+              </div>
+              <div className="text-2xl font-black text-white font-mono flex items-baseline gap-1">
+                <span>{summaryMetricsData.signins.length}</span>
+                <span className="text-xs text-zinc-400 font-normal">active sessions</span>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-gradient-to-br from-teal-950/50 to-zinc-900/90 border border-teal-800/40 rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-teal-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-teal-400" />
+                  Docs Created
+                </span>
+                <span className="text-[10px] font-semibold text-teal-400 bg-teal-950/80 border border-teal-800/60 px-1.5 py-0.5 rounded">
+                  Volume
+                </span>
+              </div>
+              <div className="text-2xl font-black text-white font-mono flex items-baseline gap-1">
+                <span>{summaryMetricsData.docsCount}</span>
+                <span className="text-xs text-zinc-400 font-normal">documents</span>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-gradient-to-br from-emerald-950/50 to-zinc-900/90 border border-emerald-800/40 rounded-xl space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Online Right Now
+                </span>
+                <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.5 rounded">
+                  Live
+                </span>
+              </div>
+              <div className="text-2xl font-black text-emerald-300 font-mono flex items-baseline gap-1">
+                <span>{currentlyActiveUsersCount}</span>
+                <span className="text-xs text-zinc-400 font-normal">users connected</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Activity View Switcher & Status Filter Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSummaryActivityTab("all")}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  summaryActivityTab === "all"
+                    ? "bg-zinc-100 text-zinc-900 shadow-sm"
+                    : "bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800"
+                }`}
+              >
+                <span>All Activity</span>
+                <span className="px-1.5 py-0.2 rounded-md bg-zinc-800 text-zinc-300 text-[10px] font-mono">
+                  {summaryMetricsData.combinedList.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSummaryActivityTab("signups")}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  summaryActivityTab === "signups"
+                    ? "bg-purple-600 text-white shadow-sm"
+                    : "bg-zinc-900 text-purple-300 hover:text-white border border-zinc-800"
+                }`}
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>New Sign-ups</span>
+                <span className="px-1.5 py-0.2 rounded-md bg-purple-950 text-purple-300 text-[10px] font-mono">
+                  {summaryMetricsData.signups.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSummaryActivityTab("signins")}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  summaryActivityTab === "signins"
+                    ? "bg-sky-600 text-white shadow-sm"
+                    : "bg-zinc-900 text-sky-300 hover:text-white border border-zinc-800"
+                }`}
+              >
+                <Key className="w-3 h-3" />
+                <span>Daily Sign-Ins</span>
+                <span className="px-1.5 py-0.2 rounded-md bg-sky-950 text-sky-300 text-[10px] font-mono">
+                  {summaryMetricsData.signins.length}
+                </span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-zinc-400 font-semibold shrink-0">Filter Status:</span>
+              <select
+                value={summaryStatusFilter}
+                onChange={(e) => setSummaryStatusFilter(e.target.value)}
+                className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded-lg px-2 py-1 font-medium focus:outline-none focus:border-purple-500 cursor-pointer"
+              >
+                <option value="all">All Account Statuses</option>
+                <option value="active">Active Only</option>
+                <option value="suspended">Suspended Only</option>
+                <option value="deleted">Deleted Only</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Activity Table / User Cards */}
+          <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden">
+            {(() => {
+              const displayUsers =
+                summaryActivityTab === "signups"
+                  ? summaryMetricsData.signups
+                  : summaryActivityTab === "signins"
+                  ? summaryMetricsData.signins
+                  : summaryMetricsData.combinedList;
+
+              if (displayUsers.length === 0) {
+                return (
+                  <div className="p-8 text-center text-zinc-500 text-xs space-y-1">
+                    <p className="font-semibold text-zinc-400">No user activity recorded for selected date filter.</p>
+                    <p className="text-[11px]">Select another date or click 'All' / 'Last 30 Days' above to view historical sign-ups and logins.</p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="divide-y divide-zinc-800/80 max-h-72 overflow-y-auto custom-scrollbar">
+                  {displayUsers.map((item: any, i: number) => {
+                    const uEmail = getUserEmail(item);
+                    const uName = getUserUsername(item);
+                    const isSignup = item.activityType === "signup";
+                    const isSelected = selectedUser?.id === item.id;
+                    const docCount = Array.isArray(item.history) ? item.history.length : (item.documentsUsed || 0);
+                    const remainingCredits = item.documentsRemaining !== undefined ? item.documentsRemaining : Math.max(0, 5 - docCount);
+                    const isPro = (item.planTier === "pro" || item.planTier === "enterprise" || (item.plan || "").toLowerCase().includes("pro"));
+
+                    return (
+                      <div
+                        key={`${item.id}_${item.activityType}_${i}`}
+                        className={`p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
+                          isSelected ? "bg-purple-950/30" : "hover:bg-zinc-800/40"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs uppercase shrink-0 ${
+                            isSignup ? "bg-purple-600 text-white" : "bg-sky-600 text-white"
+                          }`}>
+                            {(uName || "U").substring(0, 2)}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-xs text-zinc-200 truncate">
+                                {uName}
+                              </span>
+                              {isSignup ? (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-purple-950/90 text-purple-300 border border-purple-700/60 flex items-center gap-1">
+                                  <Sparkles className="w-2.5 h-2.5 text-purple-400" /> Signed Up
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-sky-950/90 text-sky-300 border border-sky-700/60 flex items-center gap-1">
+                                  <Key className="w-2.5 h-2.5 text-sky-400" /> Signed In
+                                </span>
+                              )}
+                              <span className="text-[10px] text-zinc-500 font-mono">
+                                {item.activityDate ? new Date(item.activityDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-zinc-400 truncate font-mono flex items-center gap-1.5 pt-0.5">
+                              <Mail className="w-3 h-3 text-indigo-400 shrink-0" />
+                              <span className="truncate">{uEmail || "No Email"}</span>
+                              <span className="text-zinc-600">•</span>
+                              <span className="text-zinc-400">{docCount} docs created</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Credits & Action Buttons */}
+                        <div className="flex items-center gap-2 shrink-0 justify-end">
+                          <span className={`px-2 py-1 rounded-lg text-[10px] font-extrabold border font-mono ${
+                            isPro
+                              ? "bg-emerald-950/80 text-emerald-300 border-emerald-700/60"
+                              : remainingCredits > 0
+                              ? "bg-amber-950/80 text-amber-300 border-amber-700/60"
+                              : "bg-red-950/80 text-red-300 border-red-700/60"
+                          }`}>
+                            {isPro ? "Unlimited" : `${remainingCredits} Credits Left`}
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleGrantTrialCredits(item, 5)}
+                            disabled={savingUserMeta}
+                            className="px-2.5 py-1 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-[10px] font-black uppercase rounded-lg shadow-sm border border-amber-400/40 transition-all cursor-pointer flex items-center gap-1 shrink-0"
+                            title="Grant 5 Additional Trial Credits to this user"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>+5 Credits</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setSelectedUserId(item.id)}
+                            className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[10px] font-bold rounded-lg border border-zinc-700 transition-all cursor-pointer flex items-center gap-1 shrink-0"
+                            title="Inspect user details and document history"
+                          >
+                            <Eye className="w-3 h-3 text-indigo-400" />
+                            <span>Inspect</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+        </div>
+        )}
+
+        {/* Automated Email Campaigns & Dispatcher */}
+        {adminMainTab === "campaigns" && (
         <div className="bg-zinc-950/80 border border-zinc-800 rounded-2xl p-5 mb-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-zinc-800/80">
             <div className="flex items-center gap-2.5">
@@ -2107,14 +2830,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <Mail className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                  Automated Email Campaigns & Resend Dispatcher
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    Resend Activated
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2 flex-wrap">
+                  Automated Email Campaigns & Dispatcher
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    60s Cron Worker Active
                   </span>
                 </h2>
                 <p className="text-xs text-zinc-400">
-                  Trigger automated lifecycle campaigns & broadcast newsletters to registered users
+                  Fully automated event-based & periodic lifecycle campaigns running in background. Manual triggers available for test dispatches.
                 </p>
               </div>
             </div>
@@ -2128,23 +2852,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Trigger 1: 2-Day Post Signup Founder Feedback Request */}
+            {/* Trigger 1: 1st Document Creation Follow-Up */}
             <div className="bg-zinc-900/90 border border-zinc-800/90 rounded-xl p-4 flex flex-col justify-between space-y-3">
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
                     <Zap className="w-3.5 h-3.5 text-amber-400" />
-                    2-Day Post Signup Feedback
+                    1st Doc Creation Follow-Up
                   </span>
-                  <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded-md">
-                    Template: welcome-to-billiq
+                  <span className="text-[10px] font-mono text-emerald-300 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-md">
+                    Auto: 5-min delay
                   </span>
                 </div>
                 <h3 className="text-xs font-bold text-zinc-100 mb-1">
                   "From one founder to another: Could I ask for a quick 10s favor?"
                 </h3>
                 <p className="text-[11px] text-zinc-400 leading-normal">
-                  Queries users registered ~2 days ago who have not received the rating email. Dispatches founder note from <code className="text-indigo-300 font-mono">Vatsal from BillIQ &lt;support@billiq.site&gt;</code>.
+                  Automatically schedules 5 minutes after a user creates their 1st invoice/document. Dispatches founder note from <code className="text-indigo-300 font-mono">Founder from BillIQ &lt;support@billiq.site&gt;</code>. Guardrails ensure 1 email per user.
                 </p>
               </div>
 
@@ -2154,27 +2878,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 className="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${triggeringFeedback ? "animate-spin" : ""}`} />
-                <span>{triggeringFeedback ? "Querying & Dispatches..." : "Trigger 2-Day Feedback Requests"}</span>
+                <span>{triggeringFeedback ? "Querying & Dispatches..." : "Trigger 1st Doc Follow-ups Now"}</span>
               </button>
             </div>
 
-            {/* Trigger 2: 14-Day Inactivity Reminder */}
+            {/* Trigger 2: 3-Day Inactivity Re-engagement */}
             <div className="bg-zinc-900/90 border border-zinc-800/90 rounded-xl p-4 flex flex-col justify-between space-y-3">
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5 text-amber-400" />
-                    14+ Days Inactivity Reminder
+                    3-Day Inactivity Re-engagement
                   </span>
-                  <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded-md">
-                    Template: inactive-account-reminder
+                  <span className="text-[10px] font-mono text-amber-300 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded-md">
+                    Auto: 3+ days inactive
                   </span>
                 </div>
                 <h3 className="text-xs font-bold text-zinc-100 mb-1">
                   "We miss you on BillIQ! Here is what's new in your billing workspace"
                 </h3>
                 <p className="text-[11px] text-zinc-400 leading-normal">
-                  Queries Firestore for users with <code className="text-amber-300 font-mono">lastActiveAt &gt; 5 days</code>. Dispatches re-engagement template from <code className="text-amber-300 font-mono">support@billiq.site</code>.
+                  Background worker checks users inactive for 3+ days (<code className="text-amber-300 font-mono">lastActiveAt &gt; 3 days</code>). Dispatches feature updates from <code className="text-amber-300 font-mono">support@billiq.site</code> with a 14-day anti-spam cooldown.
                 </p>
               </div>
 
@@ -2184,7 +2908,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 className="w-full py-2.5 px-3 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${triggeringInactivity ? "animate-spin" : ""}`} />
-                <span>{triggeringInactivity ? "Querying Firestore & Sending..." : "Trigger 14-Day Inactivity Emails"}</span>
+                <span>{triggeringInactivity ? "Querying & Sending..." : "Trigger 3-Day Inactivity Emails Now"}</span>
               </button>
             </div>
           </div>
@@ -2205,8 +2929,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           )}
         </div>
+        )}
 
         {/* Layout Grid: Left Sidebar (User List) & Right Panel (Inspector) */}
+        {adminMainTab === "user_directory" && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           
           {/* USER LIST PANEL */}
@@ -2344,6 +3070,114 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </select>
                 </div>
               </div>
+
+              {/* Activity & Date Range Filter Section */}
+              <div className="space-y-1.5 pt-1 border-t border-zinc-800/80">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+                    <Calendar className="w-3 h-3 text-indigo-400" />
+                    Activity & Day Filter:
+                  </span>
+                  {activityFilter !== "all" && (
+                    <button
+                      onClick={() => {
+                        setActivityFilter("all");
+                        setCustomFilterDate("");
+                      }}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
+                    >
+                      Reset Filter
+                    </button>
+                  )}
+                </div>
+
+                {/* Quick Toggle Filter Chips */}
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    onClick={() => setActivityFilter("all")}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-all cursor-pointer ${
+                      activityFilter === "all"
+                        ? "bg-indigo-600 text-white font-bold"
+                        : "bg-zinc-900 hover:bg-zinc-800 text-zinc-400"
+                    }`}
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => setActivityFilter("signups_today")}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                      activityFilter === "signups_today"
+                        ? "bg-purple-600 text-white font-bold"
+                        : "bg-zinc-900 hover:bg-zinc-800 text-purple-300"
+                    }`}
+                  >
+                    <Sparkles className="w-2.5 h-2.5" /> Signups Today ({signupsTodayCount})
+                  </button>
+                  <button
+                    onClick={() => setActivityFilter("signins_today")}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                      activityFilter === "signins_today"
+                        ? "bg-sky-600 text-white font-bold"
+                        : "bg-zinc-900 hover:bg-zinc-800 text-sky-300"
+                    }`}
+                  >
+                    <Key className="w-2.5 h-2.5" /> Sign-Ins Today ({signInsTodayCount})
+                  </button>
+                  <button
+                    onClick={() => setActivityFilter("online_now")}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                      activityFilter === "online_now"
+                        ? "bg-emerald-600 text-white font-bold"
+                        : "bg-zinc-900 hover:bg-zinc-800 text-emerald-300"
+                    }`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Online ({currentlyActiveUsersCount})
+                  </button>
+                  <button
+                    onClick={() => setActivityFilter("inactive_3d")}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                      activityFilter === "inactive_3d"
+                        ? "bg-amber-600 text-white font-bold"
+                        : "bg-zinc-900 hover:bg-zinc-800 text-amber-300"
+                    }`}
+                  >
+                    <Clock className="w-2.5 h-2.5" /> Inactive &gt;3d ({inactive3DaysCount})
+                  </button>
+                </div>
+
+                {/* Activity Dropdown & Custom Day Picker */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-0.5">
+                  <select
+                    value={activityFilter}
+                    onChange={(e) => setActivityFilter(e.target.value as any)}
+                    className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-[11px] rounded-lg px-2 py-1 font-medium focus:outline-none focus:border-indigo-500 w-full cursor-pointer truncate"
+                  >
+                    <option value="all">Filter by Lifecycle / Activity...</option>
+                    <option value="signups_today">🌟 New Signups Today ({signupsTodayCount})</option>
+                    <option value="signins_today">🔑 Sign-Ins of the Day ({signInsTodayCount})</option>
+                    <option value="online_now">🟢 Online Now (Active &lt;5m)</option>
+                    <option value="active_today">📅 Active Today</option>
+                    <option value="active_yesterday">📅 Active Yesterday</option>
+                    <option value="active_7d">⚡ Active (Last 7 Days)</option>
+                    <option value="inactive_3d">⏳ Inactive (&gt; 3 Days)</option>
+                    <option value="inactive_7d">⏳ Inactive (&gt; 7 Days)</option>
+                    <option value="custom_date">📆 Filter by Specific Date...</option>
+                  </select>
+
+                  {activityFilter === "custom_date" ? (
+                    <input
+                      type="date"
+                      value={customFilterDate}
+                      onChange={(e) => setCustomFilterDate(e.target.value)}
+                      className="bg-zinc-900 border border-indigo-500/80 text-zinc-200 text-[11px] rounded-lg px-2 py-1 font-medium focus:outline-none w-full cursor-pointer"
+                    />
+                  ) : (
+                    <div className="text-[10px] text-zinc-500 flex items-center justify-end px-1 font-mono">
+                      Showing {sortedAndFilteredUsers.length} of {usersList.length} users
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Users List Scrollable Container */}
@@ -2355,18 +3189,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               ) : sortedAndFilteredUsers.length === 0 ? (
                 <div className="p-6 text-center text-zinc-500 text-xs bg-zinc-900/50 rounded-xl border border-zinc-800">
-                  No users found matching search & sort filter.
+                  No users found matching search & activity filters.
                 </div>
               ) : (
                 sortedAndFilteredUsers.map((u, idx) => {
                   const isSelected = selectedUser?.id === u.id;
-                  const docCount = Array.isArray(u.history) ? u.history.length : (u.documentsUsed || u.documentCount || 0);
+                  const docCount = Math.max(
+                    Number(u.lifetimeCreatedCount) || 0,
+                    Number(u.totalGeneratedDocsCount) || 0,
+                    Number(u.documentsUsed) || 0,
+                    Array.isArray(u.history) ? u.history.length : (Number(u.documentCount) || 0)
+                  );
                   const signupEmail = getUserEmail(u);
                   const displayEmail = signupEmail || "No Email";
                   const permanentUsername = getUserUsername(u);
                   const accountName = permanentUsername || (signupEmail ? signupEmail.split('@')[0] : "User Account");
                   const status = u.accountStatus || (u.isDeleted || u.status === "Deleted" ? "Deleted" : "Active");
                   const plan = u.plan || "Free Trial";
+
+                  const rawCreated = u.createdAt || u.registrationDate || u.created_at;
+                  const regDate = rawCreated ? toLocalDateString(rawCreated) : "";
+                  const rawLastLogin = u.lastLoginAt || u.lastLogin || u.lastActiveAt || u.lastActive;
+                  const loginDate = rawLastLogin ? toLocalDateString(rawLastLogin) : "";
+                  const rawLastActive = u.lastActiveAt || u.lastActive || u.lastSeen || u.updatedAt || u.createdAt;
+                  const lastActiveTime = rawLastActive ? new Date(rawLastActive).getTime() : 0;
+                  const isOnlineNow = u.isOnline || (lastActiveTime > 0 && Date.now() - lastActiveTime <= 5 * 60 * 1000);
+                  const isSignupToday = regDate === todayDateStr;
+                  const isLoginToday = loginDate === todayDateStr;
+                  const isInactive3D = lastActiveTime > 0 && Date.now() - lastActiveTime > 3 * 24 * 60 * 60 * 1000;
 
                   return (
                     <motion.div
@@ -2401,10 +3251,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <Mail className="w-3 h-3 text-indigo-400 shrink-0" />
                               <span className="truncate">{displayEmail}</span>
                             </p>
-                            <p className="text-[10px] text-zinc-500 truncate font-mono flex items-center gap-1">
-                              <UserCheck className="w-3 h-3 text-zinc-500 shrink-0" />
-                              <span className="truncate">Username: {permanentUsername}</span>
-                            </p>
+                            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                              {isOnlineNow ? (
+                                <span className="text-[9px] font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.2 rounded-md flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Online
+                                </span>
+                              ) : isSignupToday ? (
+                                <span className="text-[9px] font-bold text-purple-300 bg-purple-950/80 border border-purple-800/60 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
+                                  <Sparkles className="w-2.5 h-2.5 text-purple-400" /> Signed Up Today
+                                </span>
+                              ) : isLoginToday ? (
+                                <span className="text-[9px] font-bold text-sky-300 bg-sky-950/80 border border-sky-800/60 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
+                                  <Key className="w-2.5 h-2.5 text-sky-400" /> Signed In Today
+                                </span>
+                              ) : isInactive3D ? (
+                                <span className="text-[9px] font-bold text-amber-400 bg-amber-950/80 border border-amber-800/60 px-1.5 py-0.2 rounded-md flex items-center gap-0.5">
+                                  <Clock className="w-2.5 h-2.5 text-amber-400" /> Inactive &gt;3d
+                                </span>
+                              ) : null}
+
+                              {rawCreated && (
+                                <span className="text-[9px] text-zinc-500 font-mono">
+                                  Joined {new Date(rawCreated).toLocaleDateString([], { month: "short", day: "numeric" })}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -2586,7 +3457,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div>
                           <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Docs Used / Remaining</p>
                           <p className="text-xs font-bold text-zinc-200">
-                            <span className="text-emerald-400 font-black">{selectedUser.history?.length || selectedUser.documentsUsed || 0}</span> used
+                            <span className="text-emerald-400 font-black">
+                              {Math.max(
+                                Number(selectedUser.lifetimeCreatedCount) || 0,
+                                Number(selectedUser.totalGeneratedDocsCount) || 0,
+                                Number(selectedUser.documentsUsed) || 0,
+                                Array.isArray(selectedUser.history) ? selectedUser.history.length : 0
+                              )}
+                            </span> used
                             <span className="text-zinc-500 mx-1">/</span>
                             <span className="text-amber-300 font-black">
                               {selectedUser.planTier === "pro" || selectedUser.planTier === "enterprise" ? "Unlimited" : `${selectedUser.documentsRemaining !== undefined ? selectedUser.documentsRemaining : 5} left`}
@@ -3635,6 +4513,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
         </div>
+        )}
       </div>
 
       {/* PDF PREVIEW MODAL */}

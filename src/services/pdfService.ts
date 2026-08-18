@@ -3,7 +3,7 @@ import autoTable from "jspdf-autotable";
 import { InvoiceData, DocumentType, PDFSection, PDFLayoutSettings, MeasuredValue } from "../types";
 import { format } from "date-fns";
 import { CURRENCY_SYMBOLS } from "../constants";
-import { getCurrencySymbol, getCountryConfig } from "../utils/localization";
+import { getCurrencySymbol, getCountryConfig, getTaxName, getRegionTaxLabel } from "../utils/localization";
 import { getUniquePhysicalBoxesCount } from "../lib/boxUtils";
 import { trackEvent } from "./analytics";
 function hexToRgb(hex: string): [number, number, number] {
@@ -929,6 +929,14 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<jsPDF> {
           : "(Same as Buyer / Client)";
 
         const packingListRows = isExport ? [
+          // Title Bar row
+          [
+            {
+              content: "PACKING LIST",
+              colSpan: 4,
+              styles: { halign: 'center' as const, fontStyle: 'bold' as const, fillColor: [240, 243, 246] as [number, number, number], textColor: [15, 23, 42] as [number, number, number], minCellHeight: 8 }
+            }
+          ],
           [
             { content: `EXPORTER / SHIPPER\n${business.name || "-"}\n${business.address || "-"}\n${sellerTaxLabel}: ${business.gstin || "-"}\nEmail: ${business.email || "-"}`, colSpan: 2 },
             { content: `Invoice No. / Document No.:\n${id || "-"}`, colSpan: 1 },
@@ -958,6 +966,14 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<jsPDF> {
             { content: `Final Destination:\n${data.finalDestination || "-"}`, colSpan: 1 }
           ]
         ] : [
+          // Title Bar row
+          [
+            {
+              content: "PACKING LIST",
+              colSpan: 4,
+              styles: { halign: 'center' as const, fontStyle: 'bold' as const, fillColor: [240, 243, 246] as [number, number, number], textColor: [15, 23, 42] as [number, number, number], minCellHeight: 8 }
+            }
+          ],
           [
             { content: `SELLER / SHIPPER\n${business.name || "-"}\n${business.address || "-"}\n${sellerTaxLabel}: ${business.gstin || "-"}\nEmail: ${business.email || "-"}`, colSpan: 2 },
             { content: `Invoice No. / Document No.:\n${id || "-"}`, colSpan: 1 },
@@ -1004,12 +1020,12 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<jsPDF> {
           didParseCell: (cellData) => {
             const rowIndex = cellData.row.index;
             if (isExport) {
-              if (rowIndex === 3 || rowIndex === 4 || rowIndex === 5) {
+              if (rowIndex === 4 || rowIndex === 5 || rowIndex === 6) {
                 cellData.row.height = adjustedRow345Height;
                 cellData.cell.styles.minCellHeight = adjustedRow345Height;
               }
             } else {
-              if (rowIndex === 2 || rowIndex === 3 || rowIndex === 4) {
+              if (rowIndex === 3 || rowIndex === 4 || rowIndex === 5) {
                 cellData.row.height = adjustedRow345Height;
                 cellData.cell.styles.minCellHeight = adjustedRow345Height;
               }
@@ -1026,13 +1042,25 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<jsPDF> {
               const cell = cellData.cell;
               const textLines = (cell as any)._rawTextBackup;
               if (textLines && textLines.length > 0) {
+                const rowIndex = cellData.row.index;
                 const padding = cell.styles.cellPadding;
                 const topPadding = (padding && typeof padding === 'object' && 'top' in padding) ? padding.top : 2.2;
                 const leftPadding = (padding && typeof padding === 'object' && 'left' in padding) ? padding.left : 2.2;
                 
-                const fontSize = cell.styles.fontSize || 7.5;
                 const scaleVal = doc.internal.scaleFactor || 2.834645;
                 const ptToMmValue = 1 / scaleVal;
+
+                // Row 0: Centered Title Bar ("PACKING LIST")
+                if (rowIndex === 0) {
+                  doc.setFont("helvetica", "bold");
+                  doc.setFontSize(10);
+                  doc.setTextColor(15, 23, 42);
+                  const text = textLines.join(" ");
+                  doc.text(text, cell.x + (cell.width / 2), cell.y + topPadding + (10 * ptToMmValue * 0.85), { align: "center" });
+                  return;
+                }
+
+                const fontSize = cell.styles.fontSize || 7.5;
                 const fontSizeMmVal = fontSize * ptToMmValue;
                 const lineHeight = fontSizeMmVal * 1.25; 
                 
@@ -2125,7 +2153,7 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<jsPDF> {
 
         const profitType = data.costSheetProfitType ?? "%";
         const profitValue = data.costSheetProfitValue ?? 0;
-        const profitAmount = data.costSheetProfitAmount ?? (profitType === "%" ? (productCostTotal * profitValue) / 100 : profitValue);
+        const profitAmount = data.costSheetProfitAmount ?? (profitType === "%" ? (totalLandedCost * profitValue) / 100 : profitValue);
 
         const discountType = data.costSheetDiscountType ?? "Flat";
         const discountValue = data.costSheetDiscountValue ?? 0;
@@ -2140,7 +2168,7 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<jsPDF> {
         ];
 
         if (profitAmount > 0) {
-          const profitLabel = profitType === "%" ? `Target Profit Margin (+${profitValue}% on Base Product Price):` : `Target Profit Margin (Flat):`;
+          const profitLabel = profitType === "%" ? `Target Profit Margin (+${profitValue}% on Total Landed Cost):` : `Target Profit Margin (Flat):`;
           summaryRows.push([profitLabel, `+${activeSymbol} ${profitAmount.toFixed(2)}`]);
         }
 
@@ -2403,19 +2431,18 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<jsPDF> {
       if (!isQuotation || totalTax > 0) {
         summaryTableRows.push(["Subtotal:", formatCurrencyLocal(subtotal)]);
         if (totalTax > 0) {
-          if (taxSys === "SALES_TAX_US") {
-            summaryTableRows.push(["Total Tax:", formatCurrencyLocal(totalTax)]);
-          } else if (taxSys === "VAT_GLOBAL") {
-            summaryTableRows.push(["Total VAT:", formatCurrencyLocal(totalTax)]);
-          } else if (taxSys === "GST_GLOBAL") {
-            summaryTableRows.push(["Total GST:", formatCurrencyLocal(totalTax)]);
-          } else {
+          const sellerCountry = business.country || data.countryOfOrigin || "India";
+          const taxName = getTaxName(sellerCountry);
+
+          if (taxSys === "GST_INDIA" || sellerCountry.toLowerCase().trim() === "india") {
             if (isInterState) {
               summaryTableRows.push(["Total IGST:", formatCurrencyLocal(totalTax)]);
             } else {
               summaryTableRows.push(["Total CGST:", formatCurrencyLocal(totalTax / 2)]);
               summaryTableRows.push(["Total SGST:", formatCurrencyLocal(totalTax / 2)]);
             }
+          } else {
+            summaryTableRows.push([`Total ${taxName}:`, formatCurrencyLocal(totalTax)]);
           }
         }
       } else if (hasDiscount) {
@@ -2500,11 +2527,10 @@ export async function generateInvoicePDF(data: InvoiceData): Promise<jsPDF> {
 
         sortedSlabs.forEach(slab => {
           const slabRateStr = formatPctStr(slab.rate);
-          let slabLabel = `Tax @ ${slabRateStr}`;
-          if (taxSys === "SALES_TAX_US") slabLabel = `Sales Tax @ ${slabRateStr}`;
-          else if (taxSys === "VAT_GLOBAL") slabLabel = `VAT @ ${slabRateStr}`;
-          else if (taxSys === "GST_GLOBAL") slabLabel = `GST @ ${slabRateStr}`;
-          else {
+          const sellerCountry = business.country || data.countryOfOrigin || "India";
+          const taxName = getTaxName(sellerCountry);
+          let slabLabel = `${taxName} @ ${slabRateStr}`;
+          if (taxSys === "GST_INDIA" || sellerCountry.toLowerCase().trim() === "india") {
             if (isInterState) slabLabel = `IGST @ ${slabRateStr}`;
             else slabLabel = `GST @ ${slabRateStr}`;
           }

@@ -476,19 +476,70 @@ export const COUNTRIES: CountryConfig[] = [
   { code: "ZW", name: "Zimbabwe", flag: "🇿🇼", currencyCode: "ZWG", currencySymbol: "Z$", taxSystem: "VAT_GLOBAL", taxLabel: "BP / TIN", defaultTaxRate: 15, states: [] },
 ];
 
-export function getTaxName(taxSystem?: string): string {
-  switch (taxSystem) {
-    case 'GST_INDIA':
-      return 'GST';
-    case 'SALES_TAX_US':
-      return 'Sales Tax';
-    case 'VAT_GLOBAL':
-      return 'VAT';
-    case 'GST_GLOBAL':
-      return 'GST';
-    default:
-      return 'GST';
+export function getTaxName(taxSystemOrCountry?: string): string {
+  if (!taxSystemOrCountry) return 'GST';
+  const c = taxSystemOrCountry.toLowerCase().trim();
+
+  if (c === 'sg' || c === 'singapore' || c.includes('singapore')) return 'GST';
+  if (c === 'in' || c === 'india' || c.includes('india') || c === 'gst_india') return 'GST';
+  if (c === 'us' || c === 'usa' || c.includes('united states') || c.includes('america') || c === 'sales_tax_us') return 'Sales Tax';
+  if (c === 'ca' || c === 'canada' || c.includes('canada')) return 'GST/HST';
+  if (c === 'au' || c === 'australia' || c.includes('australia')) return 'GST';
+  if (c === 'nz' || c === 'new zealand' || c.includes('zealand')) return 'GST';
+
+  const vatKeys = [
+    'vat', 'vat_global',
+    'ae', 'uae', 'united arab emirates',
+    'gb', 'uk', 'united kingdom', 'britain', 'england',
+    'de', 'germany', 'deutschland',
+    'fr', 'france',
+    'es', 'spain', 'españa',
+    'it', 'italy', 'italia',
+    'nl', 'netherlands', 'holland',
+    'be', 'belgium',
+    'se', 'sweden',
+    'pl', 'poland',
+    'at', 'austria',
+    'dk', 'denmark',
+    'fi', 'finland',
+    'pt', 'portugal',
+    'gr', 'greece',
+    'cz', 'czechia', 'czech republic',
+    'hu', 'hungary',
+    'ro', 'romania',
+    'sk', 'slovakia',
+    'ie', 'ireland',
+    'sa', 'saudi arabia', 'saudi'
+  ];
+  if (vatKeys.some(k => c === k || c.includes(k))) return 'VAT';
+
+  if (c === 'gst_global') return 'GST';
+
+  const found = COUNTRIES.find(
+    item => (item.code || "").toLowerCase() === c || (item.name || "").toLowerCase() === c
+  );
+  if (found) {
+    if (found.code === 'SG' || found.code === 'IN' || found.code === 'AU' || found.code === 'NZ') return 'GST';
+    if (found.code === 'CA') return 'GST/HST';
+    if (found.code === 'US') return 'Sales Tax';
+    if (found.taxSystem === 'VAT_GLOBAL') return 'VAT';
+    if (found.taxSystem === 'SALES_TAX_US') return 'Sales Tax';
+    if (found.taxSystem === 'GST_GLOBAL') return 'GST';
   }
+
+  return 'GST';
+}
+
+export function getTaxRateLabel(countryOrSystem?: string): string {
+  return `${getTaxName(countryOrSystem)} Rate (%)`;
+}
+
+export function getTaxAmountLabel(countryOrSystem?: string): string {
+  return `${getTaxName(countryOrSystem)} Amount`;
+}
+
+export function getTaxRegNoLabel(countryOrSystem?: string): string {
+  return getRegionTaxLabel(countryOrSystem);
 }
 
 export function getCountryTaxRates(countryNameOrCode?: string): number[] {
@@ -528,32 +579,41 @@ export function getRegionTaxLabel(countryNameOrCode?: string): string {
   if (!countryNameOrCode || typeof countryNameOrCode !== 'string') return "GSTIN";
   const c = countryNameOrCode.toLowerCase().trim();
 
-  // 1. India
+  // 1. Singapore
+  if (c === "sg" || c === "singapore" || c.includes("singapore")) {
+    return "GST Reg No";
+  }
+
+  // 2. India
   if (c === "in" || c === "india" || c.includes("india")) {
     return "GSTIN";
   }
 
-  // 2. United States
+  // 3. United States
   if (c === "us" || c === "usa" || c.includes("united states") || c.includes("america")) {
     return "EIN / Tax ID";
   }
 
-  // 3. Canada
+  // 4. Canada
   if (c === "ca" || c === "canada" || c.includes("canada")) {
-    return "Business Number (BN / GST/HST)";
+    return "GST/HST Reg No";
   }
 
-  // 4. Australia & New Zealand
+  // 5. Australia & New Zealand
   if (c === "au" || c === "australia" || c.includes("australia")) {
-    return "ABN";
+    return "GST Reg No / ABN";
   }
   if (c === "nz" || c === "new zealand" || c.includes("zealand")) {
-    return "GST No";
+    return "GST Reg No";
   }
 
-  // 5. UAE & GCC Countries
+  // 6. UAE
+  if (c === "ae" || c === "uae" || c.includes("united arab emirates") || c.includes("emirates")) {
+    return "TRN (VAT Reg No)";
+  }
+
+  // 7. GCC Countries
   const gcc = [
-    "ae", "uae", "united arab emirates",
     "sa", "ksa", "saudi arabia", "saudi",
     "qa", "qatar",
     "om", "oman",
@@ -564,7 +624,7 @@ export function getRegionTaxLabel(countryNameOrCode?: string): string {
     return "TRN";
   }
 
-  // 6. United Kingdom & EU Countries
+  // 8. United Kingdom & EU Countries
   const euUk = [
     "gb", "uk", "united kingdom", "britain", "england",
     "de", "germany", "deutschland",
@@ -584,15 +644,14 @@ export function getRegionTaxLabel(countryNameOrCode?: string): string {
     return "VAT Reg No";
   }
 
-  // 7. Check if listed in COUNTRIES with clean label
+  // 9. Check if listed in COUNTRIES
   const found = COUNTRIES.find(
     item => (item.code || "").toLowerCase() === c || (item.name || "").toLowerCase() === c
   );
-  if (found && found.taxLabel && !found.taxLabel.includes("/") && !found.taxLabel.toLowerCase().includes("tax id / vat")) {
+  if (found && found.taxLabel) {
     return found.taxLabel;
   }
 
-  // 8. Other / Default Fallback
   return "Tax ID";
 }
 
@@ -617,29 +676,118 @@ export function getCountryConfig(countryNameOrCode?: string): CountryConfig {
   return {
     code: countryNameOrCode.slice(0, 2).toUpperCase(),
     name: countryNameOrCode,
-    flag: "🌐",
-    currencyCode: "USD",
-    currencySymbol: "$",
-    taxSystem: "VAT_GLOBAL",
+    flag: "🇮🇳",
+    currencyCode: "INR",
+    currencySymbol: "₹",
+    taxSystem: "GST_INDIA",
     taxLabel: resolvedTaxLabel,
-    defaultTaxRate: 15,
+    defaultTaxRate: 18,
     states: []
   };
 }
 
 export function getCurrencySymbol(currencyCode?: string): string {
-  if (!currencyCode) return "₹";
+  if (!currencyCode || !currencyCode.trim()) return "₹";
   const cleanCode = currencyCode.trim().toUpperCase();
+  if (
+    cleanCode === "INR" || 
+    cleanCode === "RS" || 
+    cleanCode === "RS." || 
+    cleanCode === "RUPEES" || 
+    cleanCode === "RUPEE" || 
+    cleanCode === "₹" ||
+    cleanCode === "INDIA" ||
+    cleanCode === "INDIAN RUPEE"
+  ) {
+    return "₹";
+  }
   const found = ALL_CURRENCIES.find(c => c.code.toUpperCase() === cleanCode);
   if (found) return found.symbol;
-  return currencyCode;
+  const countryMatch = COUNTRIES.find(c => c.currencyCode.toUpperCase() === cleanCode || c.code.toUpperCase() === cleanCode || c.name.toUpperCase() === cleanCode);
+  if (countryMatch) return countryMatch.currencySymbol;
+  return cleanCode;
+}
+
+export const APPROX_INR_RATES: Record<string, number> = {
+  INR: 1,
+  USD: 87,
+  EUR: 94.5,
+  GBP: 111,
+  CAD: 63,
+  AUD: 56,
+  AED: 23.7,
+  SGD: 65,
+  SAR: 23.2,
+  JPY: 0.58,
+  CHF: 98,
+  CNY: 12,
+  NZD: 52,
+  MXN: 4.3,
+  BRL: 15,
+  SEK: 8.2,
+  TRY: 2.4,
+  RUB: 0.95,
+  KRW: 0.06,
+  THB: 2.4,
+  MYR: 19.5,
+  PHP: 1.5,
+  IDR: 0.0054,
+  QAR: 23.9,
+  KWD: 283,
+  OMR: 226,
+  BHD: 231
+};
+
+export function convertInrToCurrency(amountInr: number, targetCurrency = "INR"): number {
+  const code = (targetCurrency || "INR").trim().toUpperCase();
+  if (code === "INR") return amountInr;
+  const inrPerUnit = APPROX_INR_RATES[code] || 87;
+  return amountInr / inrPerUnit;
+}
+
+export function formatCurrencyAmount(
+  amount: number | undefined | null,
+  currencyCode = "INR",
+  options?: {
+    minimumFractionDigits?: number;
+    maximumFractionDigits?: number;
+    showCode?: boolean;
+    space?: boolean;
+  }
+): string {
+  const safeAmount = Number(amount) || 0;
+  const cleanCode = (currencyCode || "INR").trim().toUpperCase();
+  const symbol = getCurrencySymbol(cleanCode);
+  const isINR = cleanCode === "INR" || symbol === "₹";
+  const locale = isINR ? "en-IN" : "en-US";
+
+  const minDigits = options?.minimumFractionDigits !== undefined ? options.minimumFractionDigits : 0;
+  const maxDigits = options?.maximumFractionDigits !== undefined ? options.maximumFractionDigits : 2;
+
+  const formatted = safeAmount.toLocaleString(locale, {
+    minimumFractionDigits: minDigits,
+    maximumFractionDigits: maxDigits
+  });
+
+  const spaceStr = options?.space ? " " : "";
+  const codeSuffix = options?.showCode && symbol !== cleanCode ? ` ${cleanCode}` : "";
+
+  return `${symbol}${spaceStr}${formatted}${codeSuffix}`;
+}
+
+export function formatCurrency(
+  amount: number | undefined | null,
+  currencyCode = "INR",
+  options?: {
+    minimumFractionDigits?: number;
+    maximumFractionDigits?: number;
+    showCode?: boolean;
+    space?: boolean;
+  }
+): string {
+  return formatCurrencyAmount(amount, currencyCode, options);
 }
 
 export function formatMoney(amount: number, currencyCode = "INR"): string {
-  const symbol = getCurrencySymbol(currencyCode);
-  const formatted = amount.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
-  return `${symbol} ${formatted}`;
+  return formatCurrencyAmount(amount, currencyCode, { minimumFractionDigits: 2, maximumFractionDigits: 2, space: true });
 }

@@ -26,11 +26,13 @@ export const DocumentUpload = ({
   showMergeOption = true,
 }: DocumentUploadProps) => {
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState<string>("");
   const [mergeSimilar, setMergeSimilar] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showPasteArea, setShowPasteArea] = useState(false);
   const [pastedText, setPastedText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const showError = (msg: string) => {
     if (onError) {
@@ -43,6 +45,7 @@ export const DocumentUpload = ({
   const processFile = async (file: File) => {
     if (disabled) return;
     setIsProcessing(true);
+    setProcessingStatus("Extracting line items & specs with AI...");
     try {
       const analysis = await analyzeDocument(file, industry, history, letterhead, businessName);
       if (analysis) {
@@ -60,6 +63,7 @@ export const DocumentUpload = ({
       showError(friendlyMsg);
     } finally {
       setIsProcessing(false);
+      setProcessingStatus("");
     }
   };
 
@@ -93,45 +97,64 @@ export const DocumentUpload = ({
   };
 
   const handlePaste = async (e: ClipboardEvent) => {
-    if (disabled || isProcessing || showPasteArea) return;
+    if (disabled || isProcessing) return;
 
-    // Skip if focus is in an input or textarea to avoid interfering with normal text editing
+    // Check if target is inside an input or outside textarea
     const target = e.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+    const isInsideOtherInput = target && target.tagName === "INPUT";
+    const isInsideOtherTextarea = target && target.tagName === "TEXTAREA" && target !== textareaRef.current;
+    if (isInsideOtherInput || isInsideOtherTextarea || target?.isContentEditable) {
       return;
     }
 
-    const items = e.clipboardData?.items;
-    if (!items) return;
+    // 1. Direct file from clipboardData.files (e.g. copied image or PDF file)
+    if (e.clipboardData?.files && e.clipboardData.files.length > 0) {
+      const file = e.clipboardData.files[0];
+      if (file && (file.type.startsWith("image/") || file.type === "application/pdf" || file.name.match(/\.(png|jpe?g|webp|pdf|docx?|xlsx?|csv)$/i))) {
+        e.preventDefault();
+        await processFile(file);
+        return;
+      }
+    }
 
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf("image") !== -1 || items[i].type === "application/pdf") {
-        const file = items[i].getAsFile();
-        if (file) {
-          await processFile(file);
-          return;
+    // 2. Direct file item from clipboardData.items (e.g. screenshot or image data)
+    const items = e.clipboardData?.items;
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.indexOf("image") !== -1 || item.type === "application/pdf") {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            await processFile(file);
+            return;
+          }
         }
       }
     }
 
-    // Handled as text if no files found
-    const text = e.clipboardData?.getData("text");
-    if (text && text.length > 20) {
-      // Automatic detection of long text for analysis
-      setIsProcessing(true);
-      try {
-        const analysis = await analyzeTextContent(text, industry, businessName);
-        if (analysis && ((analysis.products && analysis.products.length > 0) || analysis.customer)) {
-          onAnalysisComplete(analysis, mergeSimilar);
-        } else {
-          showError("No products or customer details could be extracted from this text.");
+    // 3. Text pasted directly when NOT inside the paste textarea
+    if (target !== textareaRef.current) {
+      const text = e.clipboardData?.getData("text");
+      if (text && text.trim().length > 3) {
+        e.preventDefault();
+        setIsProcessing(true);
+        setProcessingStatus("Extracting line items from pasted text...");
+        try {
+          const analysis = await analyzeTextContent(text.trim(), industry, businessName);
+          if (analysis && ((analysis.products && analysis.products.length > 0) || analysis.customer)) {
+            onAnalysisComplete(analysis, mergeSimilar);
+          } else {
+            showError("No products or customer details could be extracted from this text.");
+          }
+        } catch (error: any) {
+          console.error("Paste text error:", error);
+          const friendlyMsg = getFriendlyGeminiError(error);
+          showError(friendlyMsg);
+        } finally {
+          setIsProcessing(false);
+          setProcessingStatus("");
         }
-      } catch (error: any) {
-        console.error("Paste text error:", error);
-        const friendlyMsg = getFriendlyGeminiError(error);
-        showError(friendlyMsg);
-      } finally {
-        setIsProcessing(false);
       }
     }
   };
@@ -139,8 +162,9 @@ export const DocumentUpload = ({
   const handleManualTextAnalysis = async () => {
     if (!pastedText.trim() || disabled) return;
     setIsProcessing(true);
+    setProcessingStatus("Extracting line items & specs with AI...");
     try {
-      const analysis = await analyzeTextContent(pastedText, industry, businessName);
+      const analysis = await analyzeTextContent(pastedText.trim(), industry, businessName);
       if (analysis && ((analysis.products && analysis.products.length > 0) || analysis.customer)) {
         onAnalysisComplete(analysis, mergeSimilar);
         setShowPasteArea(false);
@@ -154,6 +178,21 @@ export const DocumentUpload = ({
       showError(friendlyMsg);
     } finally {
       setIsProcessing(false);
+      setProcessingStatus("");
+    }
+  };
+
+  const handleClipboardPasteClick = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const clipText = await navigator.clipboard.readText();
+        if (clipText) {
+          setPastedText(clipText);
+          if (textareaRef.current) textareaRef.current.focus();
+        }
+      }
+    } catch (err) {
+      console.warn("Clipboard read permission denied:", err);
     }
   };
 
@@ -161,6 +200,12 @@ export const DocumentUpload = ({
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
   }, [disabled, isProcessing, industry, businessName, mergeSimilar]);
+
+  useEffect(() => {
+    if (showPasteArea && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [showPasteArea]);
 
   return (
     <div 
@@ -234,26 +279,61 @@ export const DocumentUpload = ({
       {showPasteArea && (
         <div className="mt-4 flex flex-col gap-2 bg-zinc-50 p-4 rounded-xl border border-zinc-200 animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-black text-zinc-500 uppercase tracking-widest">Paste document content</span>
-            <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400 hover:text-zinc-600" onClick={() => setShowPasteArea(false)}>
-              <X className="h-4 w-4" />
-            </Button>
+            <span className="text-xs font-black text-zinc-600 uppercase tracking-widest flex items-center gap-1.5">
+              <Clipboard className="h-3.5 w-3.5 text-brand-600" />
+              Paste document content
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] px-2 font-bold text-zinc-700 bg-white"
+                onClick={handleClipboardPasteClick}
+                title="Paste directly from clipboard"
+              >
+                Paste from Clipboard
+              </Button>
+              <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400 hover:text-zinc-600" onClick={() => setShowPasteArea(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
           <textarea
+            ref={textareaRef}
             className="w-full h-40 p-4 text-xs font-mono border border-zinc-200 rounded-xl focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 bg-white transition-all outline-none resize-none"
-            placeholder="Paste text from PO, Quote, Email or RFQ here..."
+            placeholder="Paste text from PO, Quote, WhatsApp order, Email or RFQ here... (Press Ctrl+Enter to analyze)"
             value={pastedText}
             onChange={(e) => setPastedText(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                handleManualTextAnalysis();
+              }
+            }}
           />
-          <Button 
-            size="sm" 
-            className="w-full font-black uppercase tracking-widest py-4" 
-            onClick={handleManualTextAnalysis}
-            isLoading={isProcessing}
-            disabled={!pastedText.trim()}
-          >
-            Start Smart Analysis
-          </Button>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-zinc-600">
+              {pastedText.length > 0 ? `${pastedText.length} characters` : "Press Ctrl+Enter to start"}
+            </span>
+            <Button 
+              size="sm" 
+              className="font-black uppercase tracking-widest px-6" 
+              onClick={handleManualTextAnalysis}
+              isLoading={isProcessing}
+              disabled={!pastedText.trim()}
+            >
+              Start Smart Analysis
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Processing Status Banner */}
+      {isProcessing && (
+        <div className="mt-2 flex items-center justify-center gap-2 bg-brand-50 border border-brand-200 text-brand-700 text-xs font-bold rounded-xl p-3 animate-pulse">
+          <Loader2 className="h-4 w-4 animate-spin text-brand-600" />
+          <span>{processingStatus || "Analyzing document with AI..."}</span>
         </div>
       )}
 
@@ -277,10 +357,10 @@ export const DocumentUpload = ({
         </div>
       )}
 
-      {/* Note for 50-70+ line items batch screenshots */}
-      <div className="mt-2 text-[11px] text-amber-800 bg-amber-50/90 border border-amber-200/80 rounded-xl p-2.5 shadow-2xs">
+      {/* High-Capacity Extraction Note */}
+      <div className="mt-2 text-[11px] text-zinc-600 bg-zinc-50 border border-zinc-200/80 rounded-xl p-2.5 shadow-2xs flex items-start gap-2">
         <p className="leading-snug">
-          <span className="font-bold">Pro Tip:</span> If you have a document with 50-70+ line items, we highly recommend taking screenshots of 30-40 items at a time and performing multiple batch uploads for higher extraction accuracy and speed.
+          <span className="font-bold text-zinc-900">High-Resolution OCR:</span> Supports multi-page PDFs, spreadsheets, and dense documents with 200+ line items without truncation. Small table fonts are preserved at up to 4K resolution.
         </p>
       </div>
     </div>

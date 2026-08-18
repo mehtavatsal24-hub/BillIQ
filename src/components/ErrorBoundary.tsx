@@ -3,6 +3,7 @@ import { AlertCircle, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "./Button";
 import { logErrorEvent } from "../services/auditLogger";
 import { reportApplicationError } from "../services/errorMonitorService";
+import { isDeveloperAccount } from "../utils/errorUtils";
 
 interface Props {
   children: ReactNode;
@@ -65,19 +66,25 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public render() {
     if (this.state.hasError) {
-      let errorMessage = "An unexpected error occurred in the workspace component.";
+      const userCtx = (window as any).__CURRENT_USER_CONTEXT__ || {};
+      const currentUserEmail = this.props.userEmail || userCtx.userEmail;
+      const isDev = isDeveloperAccount(currentUserEmail);
+
+      let errorMessage = "An error occurred. Please try again or contact support.";
       let isFirebaseError = false;
 
-      try {
-        if (this.state.error?.message) {
-          const parsed = JSON.parse(this.state.error.message);
-          if (parsed.error && parsed.operationType) {
-            isFirebaseError = true;
-            errorMessage = `Database Error: ${parsed.error} during ${parsed.operationType} operation.`;
+      if (isDev) {
+        try {
+          if (this.state.error?.message) {
+            const parsed = JSON.parse(this.state.error.message);
+            if (parsed.error && parsed.operationType) {
+              isFirebaseError = true;
+              errorMessage = `Database Error: ${parsed.error} during ${parsed.operationType} operation.`;
+            }
           }
+        } catch (e) {
+          errorMessage = this.state.error?.message || errorMessage;
         }
-      } catch (e) {
-        errorMessage = this.state.error?.message || errorMessage;
       }
 
       return (
@@ -96,28 +103,30 @@ export class ErrorBoundary extends Component<Props, State> {
                 <RefreshCw className="h-4 w-4 mr-2" />
                 Reload Application
               </Button>
-              {isFirebaseError && (
+              {isDev && isFirebaseError && (
                 <p className="text-xs text-zinc-500">
                   This might be due to missing database permissions or configuration.
                 </p>
               )}
             </div>
 
-            <div className="border-t border-zinc-800 pt-4 text-left">
-              <button
-                onClick={() => this.setState((prev) => ({ showDetails: !prev.showDetails }))}
-                className="text-xs font-bold text-zinc-400 hover:text-zinc-200 flex items-center justify-between w-full py-1 cursor-pointer"
-              >
-                <span>Error Diagnostics & Stack Trace</span>
-                {this.state.showDetails ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </button>
-              {this.state.showDetails && (
-                <div className="mt-2 p-3 bg-zinc-950 rounded-xl border border-zinc-800 text-[11px] font-mono text-red-300 max-h-48 overflow-auto leading-relaxed">
-                  <p className="font-bold text-red-400 mb-1">{this.state.error?.name}: {this.state.error?.message}</p>
-                  <pre className="whitespace-pre-wrap text-zinc-400 text-[10px]">{this.state.error?.stack || this.state.errorInfo?.componentStack || "No stack trace available."}</pre>
-                </div>
-              )}
-            </div>
+            {isDev && (
+              <div className="border-t border-zinc-800 pt-4 text-left">
+                <button
+                  onClick={() => this.setState((prev) => ({ showDetails: !prev.showDetails }))}
+                  className="text-xs font-bold text-zinc-400 hover:text-zinc-200 flex items-center justify-between w-full py-1 cursor-pointer"
+                >
+                  <span>Error Diagnostics & Stack Trace</span>
+                  {this.state.showDetails ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+                {this.state.showDetails && (
+                  <div className="mt-2 p-3 bg-zinc-950 rounded-xl border border-zinc-800 text-[11px] font-mono text-red-300 max-h-48 overflow-auto leading-relaxed">
+                    <p className="font-bold text-red-400 mb-1">{this.state.error?.name}: {this.state.error?.message}</p>
+                    <pre className="whitespace-pre-wrap text-zinc-400 text-[10px]">{this.state.error?.stack || this.state.errorInfo?.componentStack || "No stack trace available."}</pre>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       );

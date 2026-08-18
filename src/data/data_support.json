@@ -1,0 +1,41 @@
+[
+  {
+    "id": "sup_nfccckse7",
+    "name": "Sarah Connor",
+    "email": "sarah@cyberdyne.io",
+    "phone": "+1 415-555-0199",
+    "company": "Cyberdyne Systems",
+    "userId": "usr_sarah_101",
+    "topic": "Billing & Invoice Schema",
+    "subject": "Assistance with Multi-Currency Tax Rules",
+    "message": "We require custom tax breakdowns on our PDF export invoices.",
+    "recipient": "support@billiq.site",
+    "createdAt": "2026-08-15T13:52:50.375Z"
+  },
+  {
+    "id": "sup_vujo8vfwb",
+    "name": "",
+    "email": "mehtavatsal24@gmail.com",
+    "phone": "",
+    "company": "",
+    "userId": "",
+    "topic": "Feature Request",
+    "subject": "Contact Support Inquiry",
+    "message": "dfvdfvv",
+    "recipient": "support@billiq.site",
+    "createdAt": "2026-08-15T13:55:32.883Z"
+  },
+  {
+    "id": "sup_arxocs0l2",
+    "name": "Michael Scott",
+    "email": "michael@dundermifflin.com",
+    "phone": "",
+    "company": "",
+    "userId": "",
+    "topic": "Billing",
+    "subject": "Inquiry on Tax Export",
+    "message": "Need help exporting CSV invoices for the Scranton branch.",
+    "recipient": "support@billiq.site",
+    "createdAt": "2026-08-15T14:00:01.168Z"
+  }
+]

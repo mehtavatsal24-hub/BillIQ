@@ -145,7 +145,7 @@ const UI_ACTION_TOOLS: any[] = [
     parameters: {
       type: "OBJECT",
       properties: {
-        description: { type: "STRING", description: "Full technical description of the product" },
+        description: { type: "STRING", description: "Description of the product or service" },
         quantity: { type: "NUMBER", description: "Number of units" },
         unit: { type: "STRING", description: "Unit of measure (e.g. NOS, SET, MTR)" },
         rate: { type: "NUMBER", description: "Price per unit" },

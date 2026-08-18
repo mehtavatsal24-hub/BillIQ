@@ -80,25 +80,8 @@ export const ContactSupportModal: React.FC<ContactSupportModalProps> = ({
 
     window.addEventListener("billiq-open-support-modal", handleGlobalOpen);
 
-    const handleMailtoClick = (e: MouseEvent) => {
-      const target = (e.target as HTMLElement)?.closest("a");
-      if (target && target.href) {
-        const href = target.href.toLowerCase();
-        if (href.includes("mailto:support@billiq.site") || href.includes("mailto:support@billiq.app")) {
-          e.preventDefault();
-          e.stopPropagation();
-          openSupportModal({
-            subject: "Support Request from Website",
-          });
-        }
-      }
-    };
-
-    document.addEventListener("click", handleMailtoClick, true);
-
     return () => {
       window.removeEventListener("billiq-open-support-modal", handleGlobalOpen);
-      document.removeEventListener("click", handleMailtoClick, true);
     };
   }, [userEmail]);
 
@@ -223,12 +206,12 @@ export const ContactSupportModal: React.FC<ContactSupportModalProps> = ({
                   </div>
                   <div>
                     <h3 className="text-lg font-bold text-zinc-900">
-                      Message Sent! Our support team will get back to you shortly.
+                      Your message has been sent to our support team. We will get back to you shortly.
                     </h3>
                     <p className="text-xs text-zinc-600 mt-1 max-w-md mx-auto leading-relaxed">
-                      Your query has been dispatched to{" "}
+                      Your message was routed directly to our dedicated mailbox at{" "}
                       <a href="mailto:support@billiq.site" className="font-bold text-brand-600 underline">support@billiq.site</a>.
-                      We will reply to <strong className="text-zinc-800">{email}</strong> as soon as possible.
+                      We will reply to <strong className="text-zinc-800">{email}</strong>.
                     </p>
                   </div>
                   <div className="pt-2">

@@ -130,7 +130,11 @@ export const ProductAutocomplete = ({
       <div className="relative group">
         <textarea
           ref={textareaRef}
-          className="w-full px-4 py-3 bg-white border border-zinc-200 rounded-xl text-sm transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 placeholder:text-zinc-300 placeholder:font-medium resize-none min-h-[46px] overflow-hidden hover:border-zinc-300"
+          draggable={false}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+          }}
+          className="w-full px-4 py-3 bg-white border border-zinc-200 rounded-xl text-sm transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 placeholder:text-zinc-300 placeholder:font-medium resize-none min-h-[46px] overflow-hidden hover:border-zinc-300 select-text"
           value={value ?? ""}
           rows={1}
           onChange={(e) => {

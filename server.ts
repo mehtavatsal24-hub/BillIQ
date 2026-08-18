@@ -5,6 +5,7 @@ import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 
@@ -28,7 +29,7 @@ let activeSmtpConfig: SmtpConfig = {
   secure: process.env.SMTP_SECURE === "true",
   user: process.env.SMTP_USER || "",
   pass: process.env.SMTP_PASS || "",
-  from: process.env.SMTP_FROM || '"BillIQ Support" <onboarding@resend.dev>',
+  from: process.env.SMTP_FROM || 'BillIQ Support <support@billiq.site>',
 };
 
 async function sendMailWithFallback(transporter: any, mailOptions: nodemailer.SendMailOptions) {
@@ -45,7 +46,7 @@ async function sendMailWithFallback(transporter: any, mailOptions: nodemailer.Se
       try {
         return await transporter.sendMail({
           ...mailOptions,
-          from: "BillIQ Support <onboarding@resend.dev>",
+          from: "BillIQ Support <support@billiq.site>",
           subject: `[BillIQ Notification] ${mailOptions.subject}`,
         });
       } catch (fallbackErr: any) {
@@ -58,8 +59,138 @@ async function sendMailWithFallback(transporter: any, mailOptions: nodemailer.Se
   }
 }
 
+function isValidDeliverableEmail(email: any): boolean {
+  if (!email || typeof email !== "string") return false;
+  let clean = email.trim().toLowerCase();
+  const match = clean.match(/<([^>]+)>/);
+  if (match && match[1]) clean = match[1].trim();
+
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  if (!emailRegex.test(clean)) return false;
+
+  const dummyDomains = [
+    "example.com",
+    "example.org",
+    "example.net",
+    "test.com",
+    "domain.com",
+    "sample.com",
+    "invalid.com",
+    "invalid",
+    "smartbill.ai",
+    "localhost",
+  ];
+  const domain = clean.split("@")[1];
+  if (!domain || dummyDomains.includes(domain)) return false;
+  return true;
+}
+
+async function dispatchEmail({
+  to,
+  from,
+  replyTo,
+  subject,
+  html,
+}: {
+  to: string | string[];
+  from?: string;
+  replyTo?: string;
+  subject: string;
+  html: string;
+}): Promise<boolean> {
+  const rawList = Array.isArray(to) ? to : [to];
+  const recipientList = rawList
+    .map((e) => {
+      if (typeof e !== "string") return "";
+      let clean = e.trim().toLowerCase();
+      const m = clean.match(/<([^>]+)>/);
+      if (m && m[1]) clean = m[1].trim();
+      return clean;
+    })
+    .filter(isValidDeliverableEmail);
+
+  if (recipientList.length === 0) {
+    console.log(`[Email Dispatch Info] Skipped dispatch for non-deliverable/placeholder recipient(s): ${rawList.join(", ")}`);
+    return true;
+  }
+
+  let cleanReplyTo: string | undefined = undefined;
+  if (replyTo && typeof replyTo === "string") {
+    let cand = replyTo.trim().toLowerCase();
+    const m = cand.match(/<([^>]+)>/);
+    if (m && m[1]) cand = m[1].trim();
+    if (isValidDeliverableEmail(cand)) {
+      cleanReplyTo = cand;
+    }
+  }
+
+  const resendKey = process.env.RESEND_API_KEY || "re_CyKNhy77_MzLbz3JMKbPu35t51iJekibm";
+
+  if (resendKey) {
+    try {
+      const resend = new Resend(resendKey);
+      
+      // Ensure fromAddress strictly uses the verified @billiq.site domain in Resend
+      let fromAddress = "BillIQ Support <support@billiq.site>";
+      if (from && from.includes("@billiq.site")) {
+        fromAddress = from;
+      } else if (activeSmtpConfig.from && activeSmtpConfig.from.includes("@billiq.site")) {
+        fromAddress = activeSmtpConfig.from;
+      }
+
+      const resendPayload: any = {
+        from: fromAddress,
+        to: recipientList,
+        subject: subject || "BillIQ Notification",
+        html: html || "<p>Notification from BillIQ</p>",
+      };
+      if (cleanReplyTo) {
+        resendPayload.replyTo = cleanReplyTo;
+      }
+
+      console.log(`[Resend Dispatch] Sending email to ${recipientList.join(", ")} from ${fromAddress} (reply-to: ${cleanReplyTo || "N/A"})...`);
+      const { data, error } = await resend.emails.send(resendPayload);
+
+      if (data) {
+        console.log("[Resend Dispatch Success]:", data);
+        return true;
+      }
+
+      if (error) {
+        console.warn("[Resend Dispatch Notice]:", error.message || error);
+      }
+    } catch (resendErr: any) {
+      console.warn("[Resend Dispatch Exception]:", resendErr?.message || resendErr);
+    }
+  }
+
+  if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: activeSmtpConfig.host,
+        port: activeSmtpConfig.port,
+        secure: activeSmtpConfig.secure,
+        auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
+      });
+
+      await sendMailWithFallback(transporter, {
+        from: from || activeSmtpConfig.from,
+        to: recipientList.join(","),
+        replyTo: cleanReplyTo,
+        subject: subject,
+        html: html,
+      });
+      return true;
+    } catch (smtpErr: any) {
+      console.warn("[SMTP Dispatch Exception]:", smtpErr?.message || smtpErr);
+    }
+  }
+
+  return true;
+}
+
 // Initialize Google GenAI on the secure server side
-const GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"];
+const GEMINI_MODELS = ["gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-flash-latest"];
 const GEMINI_MODEL = GEMINI_MODELS[0];
 
 import { initializeApp, getApps } from "firebase-admin/app";
@@ -144,14 +275,14 @@ async function callWithRetry<T>(
           status === 429 ||
           status === 500;
 
-        // If high demand/503 on current model and we have another model available, fall back quickly after 1 attempt
-        if (isUnavailable && attempt >= 1 && mIndex < GEMINI_MODELS.length - 1) {
-          console.log(`[Gemini API Model Switch] ${currentModel} busy (503 high demand). Switching to ${GEMINI_MODELS[mIndex + 1]}...`);
+        // If high demand/503 or quota limit on current model and we have another model available, fall back immediately
+        if ((isUnavailable || status === 429 || errorMsg.includes("RESOURCE_EXHAUSTED")) && mIndex < GEMINI_MODELS.length - 1) {
+          console.log(`[Gemini API Model Switch] ${currentModel} encountered ${status || 'busy status'}. Immediately switching to ${GEMINI_MODELS[mIndex + 1]}...`);
           break; // Switch to next model in GEMINI_MODELS
         }
 
         if (isTransient && attempt < retriesPerModel) {
-          const jitter = Math.floor(Math.random() * 250);
+          const jitter = Math.floor(Math.random() * 200);
           const waitTime = currentDelay + jitter;
           console.log(`[Gemini API Retry Note] Model ${currentModel} busy (${status || 'transient'}). Retrying in ${waitTime}ms (Attempt ${attempt + 1}/${retriesPerModel})...`);
           await new Promise((resolve) => setTimeout(resolve, waitTime));
@@ -173,47 +304,83 @@ async function callWithRetry<T>(
   throw lastError || new Error("Gemini API call failed after retries and model fallbacks.");
 }
 
-// Helper: safeJSONParse
+// Helper: safeJSONParse with robust truncated array & object salvage
 function safeJSONParse(text: string, fallback: any = {}): any {
-  if (!text) return fallback;
+  if (!text || typeof text !== "string") return fallback;
   let cleaned = text.trim();
 
   if (cleaned.includes("```json")) {
-    const match = cleaned.match(/```json\s*([\s\S]*?)\s*```/);
-    if (match) cleaned = match[1].trim();
+    const match = cleaned.match(/```json\s*([\s\S]*?)\s*(?:```|$)/);
+    if (match && match[1]) cleaned = match[1].trim();
   } else if (cleaned.includes("```")) {
-    const match = cleaned.match(/```\s*([\s\S]*?)\s*```/);
-    if (match) cleaned = match[1].trim();
+    const match = cleaned.match(/```\s*([\s\S]*?)\s*(?:```|$)/);
+    if (match && match[1]) cleaned = match[1].trim();
   }
 
+  // 1. Direct parse attempt
   try {
     return JSON.parse(cleaned);
   } catch (e) {
-    // If simple parse fails, try basic cleaning
-    try {
-      const startObj = cleaned.indexOf("{");
-      const startArr = cleaned.indexOf("[");
-      let start = -1;
-      if (startObj !== -1 && startArr !== -1) {
-        start = Math.min(startObj, startArr);
-      } else if (startObj !== -1) {
-        start = startObj;
-      } else if (startArr !== -1) {
-        start = startArr;
-      }
-
-      const endObj = cleaned.lastIndexOf("}");
-      const endArr = cleaned.lastIndexOf("]");
-      const end = Math.max(endObj, endArr);
-
-      if (start !== -1 && end !== -1 && end > start) {
-        const sliced = cleaned.slice(start, end + 1);
-        return JSON.parse(sliced);
-      }
-    } catch (err2) {
-      console.error("Server safeJSONParse error:", err2);
-    }
+    // Continue to boundary parsing
   }
+
+  // 2. Substring boundary parse
+  try {
+    const startObj = cleaned.indexOf("{");
+    const startArr = cleaned.indexOf("[");
+    let start = -1;
+    if (startObj !== -1 && startArr !== -1) {
+      start = Math.min(startObj, startArr);
+    } else if (startObj !== -1) {
+      start = startObj;
+    } else if (startArr !== -1) {
+      start = startArr;
+    }
+
+    const endObj = cleaned.lastIndexOf("}");
+    const endArr = cleaned.lastIndexOf("]");
+    const end = Math.max(endObj, endArr);
+
+    if (start !== -1 && end !== -1 && end > start) {
+      const sliced = cleaned.slice(start, end + 1);
+      return JSON.parse(sliced);
+    }
+  } catch (err2) {
+    // Continue to truncated recovery
+  }
+
+  // 3. Truncated recovery for large 200+ item payloads
+  try {
+    const startObj = cleaned.indexOf("{");
+    if (startObj !== -1) {
+      const str = cleaned.slice(startObj);
+      const lastItemEnd = str.lastIndexOf("}");
+      if (lastItemEnd !== -1) {
+        let candidate = str.slice(0, lastItemEnd + 1);
+        const openBraces = (candidate.match(/\{/g) || []).length;
+        const closeBraces = (candidate.match(/\}/g) || []).length;
+        const openBrackets = (candidate.match(/\[/g) || []).length;
+        const closeBrackets = (candidate.match(/\]/g) || []).length;
+
+        for (let i = 0; i < openBrackets - closeBrackets; i++) {
+          candidate += "]";
+        }
+        for (let i = 0; i < openBraces - closeBraces; i++) {
+          candidate += "}";
+        }
+
+        try {
+          return JSON.parse(candidate);
+        } catch {
+          candidate = candidate.replace(/,\s*([\}\]])/g, "$1");
+          return JSON.parse(candidate);
+        }
+      }
+    }
+  } catch (repairErr) {
+    console.warn("Server truncated JSON recovery failed:", repairErr);
+  }
+
   return fallback;
 }
 
@@ -247,9 +414,9 @@ app.use(
   })
 );
 
-// Payload size limit restricted to 10mb
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+// Payload size limit expanded to 25mb for multi-page documents and high-resolution scans
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
 // Rate Limiting on /api/ endpoints
 const apiLimiter = rateLimit({
@@ -278,11 +445,20 @@ interface RegisteredUser {
   createdAt: string;
   updatedAt?: string;
   lastActive?: string | null;
+  lastActiveAt?: string | null;
   lastSeen?: string | null;
   isOnline?: boolean;
   lastLogin?: string;
+  lastLoginAt?: string;
   registrationDate?: string;
   created_at?: string;
+  documentsCount?: number;
+  firstDocCreatedAt?: string | null;
+  hasReceivedFirstDocFollowup?: boolean;
+  firstDocFollowupSentAt?: string | null;
+  hasReceivedRatingEmail?: boolean;
+  hasReceivedInactivityReminder?: boolean;
+  lastInactivityReminderSentAt?: string | null;
 }
 
 let registeredUsers: RegisteredUser[] = [
@@ -509,6 +685,7 @@ app.post("/api/heartbeat", (req, res) => {
       userRecord.lastSeen = isOffline ? null : nowIso;
       userRecord.isOnline = !isOffline;
       userRecord.lastActive = nowIso;
+      userRecord.lastActiveAt = nowIso;
       userRecord.updatedAt = nowIso;
     } else if (trimmedEmail || trimmedUsername || userId) {
       userRecord = {
@@ -518,6 +695,7 @@ app.post("/api/heartbeat", (req, res) => {
         createdAt: nowIso,
         updatedAt: nowIso,
         lastActive: nowIso,
+        lastActiveAt: nowIso,
         lastSeen: isOffline ? null : nowIso,
         isOnline: !isOffline,
       };
@@ -530,7 +708,7 @@ app.post("/api/heartbeat", (req, res) => {
     const currentlyActiveCount = registeredUsers.filter((u) => {
       if (u.isOnline === false) return false;
       const lastSeenTime = u.lastSeen ? new Date(u.lastSeen).getTime() : 0;
-      const lastActiveTime = u.lastActive ? new Date(u.lastActive).getTime() : 0;
+      const lastActiveTime = (u.lastActiveAt || u.lastActive) ? new Date(u.lastActiveAt || u.lastActive!).getTime() : 0;
       const newestTime = Math.max(lastSeenTime, lastActiveTime);
       return newestTime >= fiveMinutesAgo;
     }).length;
@@ -544,6 +722,171 @@ app.post("/api/heartbeat", (req, res) => {
     console.error("[Heartbeat Error]:", err);
     return res.status(500).json({ success: false, error: "Failed to process heartbeat" });
   }
+});
+
+// Explicit Login Tracking Endpoint (Records Sign-In Timestamp of the Day)
+app.post("/api/track-login", (req, res) => {
+  try {
+    const { email, username, userId } = req.body || {};
+    const nowIso = new Date().toISOString();
+    const trimmedEmail = email ? String(email).trim().toLowerCase() : "";
+    const trimmedUsername = username ? String(username).trim().toLowerCase() : "";
+
+    let userRecord = registeredUsers.find(
+      (u) =>
+        (userId && u.id === userId) ||
+        (trimmedEmail && (u.email || "").toLowerCase() === trimmedEmail) ||
+        (trimmedUsername && (u.username || "").toLowerCase() === trimmedUsername)
+    );
+
+    if (userRecord) {
+      userRecord.lastLogin = nowIso;
+      userRecord.lastLoginAt = nowIso;
+      userRecord.lastActive = nowIso;
+      userRecord.lastActiveAt = nowIso;
+      userRecord.lastSeen = nowIso;
+      userRecord.isOnline = true;
+      userRecord.updatedAt = nowIso;
+    } else if (trimmedEmail || trimmedUsername || userId) {
+      userRecord = {
+        id: userId || "usr_" + Math.random().toString(36).substring(2, 11),
+        username: username || (trimmedEmail ? trimmedEmail.split("@")[0] : "User"),
+        email: email || "",
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        lastLogin: nowIso,
+        lastLoginAt: nowIso,
+        lastActive: nowIso,
+        lastActiveAt: nowIso,
+        lastSeen: nowIso,
+        isOnline: true,
+      };
+      registeredUsers.push(userRecord);
+    }
+
+    saveUsersToDisk();
+    return res.json({ success: true, timestamp: nowIso, user: userRecord });
+  } catch (err: any) {
+    console.error("Track login error:", err);
+    return res.status(500).json({ success: false, error: "Failed to record login event." });
+  }
+});
+
+// First Document Creation Tracking Endpoint (Schedules 5-Minute Followup)
+app.post("/api/track-first-document", (req, res) => {
+  try {
+    const { email, username, userId, documentsCount } = req.body || {};
+    const nowIso = new Date().toISOString();
+    const trimmedEmail = email ? String(email).trim().toLowerCase() : "";
+    const trimmedUsername = username ? String(username).trim().toLowerCase() : "";
+
+    let userRecord = registeredUsers.find(
+      (u) =>
+        (userId && u.id === userId) ||
+        (trimmedEmail && (u.email || "").toLowerCase() === trimmedEmail) ||
+        (trimmedUsername && (u.username || "").toLowerCase() === trimmedUsername)
+    );
+
+    if (!userRecord && (trimmedEmail || trimmedUsername || userId)) {
+      userRecord = {
+        id: userId || "usr_" + Math.random().toString(36).substring(2, 11),
+        username: username || (trimmedEmail ? trimmedEmail.split("@")[0] : "User"),
+        email: email || "",
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        lastActive: nowIso,
+        lastActiveAt: nowIso,
+      };
+      registeredUsers.push(userRecord);
+    }
+
+    if (userRecord) {
+      userRecord.documentsCount = Math.max(userRecord.documentsCount || 0, documentsCount || 1);
+      userRecord.lastActive = nowIso;
+      userRecord.lastActiveAt = nowIso;
+      userRecord.updatedAt = nowIso;
+
+      if (!userRecord.firstDocCreatedAt) {
+        userRecord.firstDocCreatedAt = nowIso;
+      }
+
+      // Schedule 5-minute delayed automated dispatch if not already received
+      if (!userRecord.hasReceivedFirstDocFollowup && userRecord.email && isValidDeliverableEmail(userRecord.email)) {
+        scheduleFirstDocFollowup(userRecord);
+      }
+
+      saveUsersToDisk();
+    }
+
+    return res.json({
+      success: true,
+      message: "First document event registered.",
+      hasReceivedFirstDocFollowup: userRecord?.hasReceivedFirstDocFollowup || false,
+      firstDocCreatedAt: userRecord?.firstDocCreatedAt,
+    });
+  } catch (err: any) {
+    console.error("Track first document error:", err);
+    return res.status(500).json({ success: false, error: "Failed to record first document event." });
+  }
+});
+
+// API Usage & Token Spend Intelligence Persistence
+const DATA_DIR = path.join(process.cwd(), "src", "data");
+const API_LOGS_FILE = path.join(DATA_DIR, "api_usage_logs.json");
+let apiUsageLogs: any[] = [];
+
+try {
+  if (fs.existsSync(API_LOGS_FILE)) {
+    const raw = fs.readFileSync(API_LOGS_FILE, "utf-8");
+    apiUsageLogs = JSON.parse(raw);
+    console.log(`[API Logs]: Loaded ${apiUsageLogs.length} audit records from disk.`);
+  }
+} catch (e) {
+  console.warn("[API Logs]: Notice initializing audit logs:", e);
+}
+
+function saveApiLogsToDisk() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(API_LOGS_FILE, JSON.stringify(apiUsageLogs.slice(-1000), null, 2), "utf-8");
+  } catch (e) {
+    console.warn("[API Logs]: Notice saving audit logs to disk:", e);
+  }
+}
+
+app.post("/api/log-usage", (req, res) => {
+  try {
+    const entry = req.body;
+    if (!entry) {
+      return res.status(400).json({ success: false, error: "Log payload required." });
+    }
+
+    const id = entry.id || `usage_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const logItem = {
+      ...entry,
+      id,
+      timestamp: entry.timestamp || new Date().toISOString(),
+    };
+
+    apiUsageLogs.unshift(logItem);
+    if (apiUsageLogs.length > 2000) apiUsageLogs = apiUsageLogs.slice(0, 2000);
+    saveApiLogsToDisk();
+
+    return res.json({ success: true, log: logItem });
+  } catch (err: any) {
+    console.error("Save API usage log error:", err);
+    return res.status(500).json({ success: false, error: "Failed to record API usage log." });
+  }
+});
+
+app.get("/api/api-usage-logs", (req, res) => {
+  return res.json({
+    success: true,
+    logs: apiUsageLogs.slice(0, 500),
+    totalCount: apiUsageLogs.length,
+  });
 });
 
 // SMTP Settings Endpoints
@@ -648,7 +991,7 @@ const SUPPORT_FILE_PATH = path.join(process.cwd(), "src", "data", "data_support.
 
 app.post("/api/feedback", async (req, res) => {
   try {
-    const { category, rating, feedbackText, userEmail } = req.body;
+    const { category, rating, feedbackText, userEmail, userId, userName, companyName, phone, environment } = req.body;
     const recipient = "support@billiq.site";
     const timestamp = new Date().toISOString();
 
@@ -658,6 +1001,10 @@ app.post("/api/feedback", async (req, res) => {
       rating: rating || 5,
       feedbackText: feedbackText || "",
       userEmail: userEmail || "Anonymous",
+      userName: userName || "",
+      companyName: companyName || "",
+      phone: phone || "",
+      userId: userId || "",
       recipient,
       createdAt: timestamp,
     };
@@ -683,44 +1030,75 @@ app.post("/api/feedback", async (req, res) => {
 
     console.log(`[FEEDBACK SUBMITTED FOR ${recipient}]`, submission);
 
-    let mailSent = false;
-    if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
-      try {
-        const transporter = nodemailer.createTransport({
-          host: activeSmtpConfig.host,
-          port: activeSmtpConfig.port,
-          secure: activeSmtpConfig.secure,
-          auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
-        });
+    const rawReplyEmail = typeof userEmail === "string" ? userEmail.trim() : "";
+    const replyToEmail = (rawReplyEmail && rawReplyEmail.includes("@") && rawReplyEmail.toLowerCase() !== "anonymous" && rawReplyEmail.toLowerCase() !== "support@billiq.site")
+      ? rawReplyEmail
+      : undefined;
 
-        await sendMailWithFallback(transporter, {
-          from: activeSmtpConfig.from,
-          to: recipient,
-          subject: `[BillIQ Feedback] ${String(category).toUpperCase()} - ${rating} Stars`,
-          html: `
-            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
-              <h2 style="color: #4f46e5;">New BillIQ Feedback</h2>
-              <p><strong>Category:</strong> ${category}</p>
-              <p><strong>Rating:</strong> ${rating} / 5 Stars</p>
-              <p><strong>From User:</strong> ${userEmail || "Anonymous"}</p>
-              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 16px 0;" />
-              <p><strong>Feedback Message:</strong></p>
-              <blockquote style="background: #f8fafc; padding: 12px; border-left: 4px solid #4f46e5; margin: 0;">
-                ${feedbackText}
-              </blockquote>
-              <p style="color: #64748b; font-size: 12px; margin-top: 20px;">Submitted at ${timestamp}</p>
-            </div>
-          `,
-        });
-        mailSent = true;
-      } catch (err) {
-        console.error("Nodemailer failed to dispatch feedback email:", err);
-      }
-    }
+    const senderIdentifier = userName || userEmail || "Customer";
+    const mailSent = await dispatchEmail({
+      from: activeSmtpConfig.from || "BillIQ Support <support@billiq.site>",
+      to: recipient,
+      replyTo: replyToEmail,
+      subject: `[BillIQ Support] New message from ${senderIdentifier} (${rating}★ Feedback)`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 14px; background-color: #ffffff;">
+          <div style="border-bottom: 2px solid #4f46e5; padding-bottom: 12px; margin-bottom: 18px;">
+            <h2 style="color: #4f46e5; margin: 0; font-size: 20px;">⭐ New User Feedback Received</h2>
+            <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">Routed directly to Zoho Support Mailbox (${recipient})</p>
+          </div>
+
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 18px; font-size: 13px; color: #334155;">
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; width: 35%; color: #475569;">Customer Name:</td>
+              <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${userName || "Not specified"}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Customer Email:</td>
+              <td style="padding: 8px 0; color: #4f46e5; font-weight: 600;">${userEmail || "Anonymous"}</td>
+            </tr>
+            ${phone ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Phone Number:</td>
+              <td style="padding: 8px 0; color: #0f172a;">${phone}</td>
+            </tr>` : ""}
+            ${companyName ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Company / Business:</td>
+              <td style="padding: 8px 0; color: #0f172a;">${companyName}</td>
+            </tr>` : ""}
+            ${userId ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Account / User ID:</td>
+              <td style="padding: 8px 0; font-family: monospace; color: #64748b;">${userId}</td>
+            </tr>` : ""}
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Category:</td>
+              <td style="padding: 8px 0; text-transform: uppercase; font-weight: 700; color: #0284c7;">${category}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Rating:</td>
+              <td style="padding: 8px 0; color: #eab308; font-weight: 700; font-size: 15px;">${rating} / 5 Stars</td>
+            </tr>
+          </table>
+
+          <div style="margin-top: 14px;">
+            <p style="font-weight: bold; color: #1e293b; margin-bottom: 8px; font-size: 14px;">Feedback Details:</p>
+            <blockquote style="background: #f8fafc; padding: 14px; border-left: 4px solid #4f46e5; border-radius: 6px; margin: 0; color: #1e293b; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">${feedbackText}</blockquote>
+          </div>
+
+          <div style="margin-top: 24px; padding-top: 12px; border-top: 1px solid #f1f5f9; font-size: 11px; color: #94a3b8;">
+            <p style="margin: 2px 0;"><strong>Timestamp:</strong> ${timestamp}</p>
+            <p style="margin: 2px 0;"><strong>Environment:</strong> ${environment || process.env.NODE_ENV || "production"}</p>
+            <p style="margin: 2px 0;"><strong>Reply-To:</strong> Clicking "Reply" in Zoho Mail will respond directly to ${replyToEmail || userEmail || "the sender"}.</p>
+          </div>
+        </div>
+      `,
+    });
 
     return res.json({
       success: true,
-      message: `Feedback recorded and routed to ${recipient}!`,
+      message: `Your message has been sent to our support team. We will get back to you shortly.`,
       mailSent,
       submission,
     });
@@ -733,7 +1111,7 @@ app.post("/api/feedback", async (req, res) => {
 // Mandatory Feedback Survey Route
 app.post("/api/survey-feedback", async (req, res) => {
   try {
-    const { userId, userEmail, q1_timeSaved, q2_betterSoftware, q3_likedConcept, q4_paidIntent, q5_recommendedFeatures } = req.body;
+    const { userId, userEmail, userName, companyName, phone, environment, q1_timeSaved, q2_betterSoftware, q3_likedConcept, q4_paidIntent, q5_recommendedFeatures } = req.body;
     const recipient = "support@billiq.site";
     const timestamp = new Date().toISOString();
 
@@ -741,6 +1119,9 @@ app.post("/api/survey-feedback", async (req, res) => {
       id: "srv_" + Math.random().toString(36).substring(2, 11),
       userId: userId || "Guest User",
       userEmail: userEmail || "Anonymous",
+      userName: userName || "",
+      companyName: companyName || "",
+      phone: phone || "",
       q1_timeSaved,
       q2_betterSoftware,
       q3_likedConcept,
@@ -771,68 +1152,86 @@ app.post("/api/survey-feedback", async (req, res) => {
 
     console.log(`[SURVEY FEEDBACK SUBMITTED FOR ${recipient}]`, surveyPayload);
 
-    let mailSent = false;
-    if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
-      try {
-        const transporter = nodemailer.createTransport({
-          host: activeSmtpConfig.host,
-          port: activeSmtpConfig.port,
-          secure: activeSmtpConfig.secure,
-          auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
-        });
+    const rawReplyEmail = typeof userEmail === "string" ? userEmail.trim() : "";
+    const replyToEmail = (rawReplyEmail && rawReplyEmail.includes("@") && rawReplyEmail.toLowerCase() !== "anonymous" && rawReplyEmail.toLowerCase() !== "support@billiq.site")
+      ? rawReplyEmail
+      : undefined;
 
-        await sendMailWithFallback(transporter, {
-          from: activeSmtpConfig.from,
-          to: recipient,
-          subject: `[SmartBill AI] Product Feedback Survey Response (${userEmail || 'User'})`,
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
-              <h2 style="color: #2563eb; margin-top: 0;">🚀 New Product Feedback Survey Submission</h2>
-              <p style="color: #475569; font-size: 14px; margin-bottom: 20px;">
-                A user has submitted their mandatory feedback survey response.
-              </p>
-              
-              <div style="background-color: #f8fafc; padding: 16px; border-radius: 12px; margin-bottom: 20px; font-size: 13px; color: #334155;">
-                <p style="margin: 4px 0;"><strong>User ID:</strong> ${userId || 'N/A'}</p>
-                <p style="margin: 4px 0;"><strong>User Email:</strong> ${userEmail || 'Anonymous'}</p>
-                <p style="margin: 4px 0;"><strong>Timestamp:</strong> ${timestamp}</p>
-              </div>
+    const senderIdentifier = userName || userEmail || "Customer";
+    const mailSent = await dispatchEmail({
+      from: activeSmtpConfig.from || "BillIQ Support <support@billiq.site>",
+      to: recipient,
+      replyTo: replyToEmail,
+      subject: `[BillIQ Support] New message from ${senderIdentifier} (Product Survey)`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 14px; background-color: #ffffff;">
+          <div style="border-bottom: 2px solid #2563eb; padding-bottom: 12px; margin-bottom: 18px;">
+            <h2 style="color: #2563eb; margin: 0; font-size: 20px;">🚀 Product Survey Response</h2>
+            <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">Routed directly to Zoho Support Mailbox (${recipient})</p>
+          </div>
+          
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 18px; font-size: 13px; color: #334155;">
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; width: 35%; color: #475569;">Customer Name:</td>
+              <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${userName || "Not specified"}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Customer Email:</td>
+              <td style="padding: 8px 0; color: #2563eb; font-weight: 600;">${userEmail || "Anonymous"}</td>
+            </tr>
+            ${phone ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Phone Number:</td>
+              <td style="padding: 8px 0; color: #0f172a;">${phone}</td>
+            </tr>` : ""}
+            ${companyName ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Company / Business:</td>
+              <td style="padding: 8px 0; color: #0f172a;">${companyName}</td>
+            </tr>` : ""}
+            ${userId ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Account / User ID:</td>
+              <td style="padding: 8px 0; font-family: monospace; color: #64748b;">${userId}</td>
+            </tr>` : ""}
+          </table>
 
-              <table style="width: 100%; border-collapse: collapse; font-size: 13px; text-align: left;">
-                <tr style="border-bottom: 1px solid #f1f5f9;">
-                  <td style="padding: 10px 0; font-weight: bold; color: #1e293b; width: 45%;">Q1 (Time Saved)</td>
-                  <td style="padding: 10px 0; color: #2563eb; font-weight: bold;">${q1_timeSaved || 'N/A'}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;">
-                  <td style="padding: 10px 0; font-weight: bold; color: #1e293b;">Q2 (Better Than Current Tool)</td>
-                  <td style="padding: 10px 0; color: #059669; font-weight: bold;">${q2_betterSoftware || 'N/A'}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;">
-                  <td style="padding: 10px 0; font-weight: bold; color: #1e293b;">Q3 (Liked Idea / Concept)</td>
-                  <td style="padding: 10px 0; color: #7c3aed; font-weight: bold;">${q3_likedConcept || 'N/A'}</td>
-                </tr>
-                <tr style="border-bottom: 1px solid #f1f5f9;">
-                  <td style="padding: 10px 0; font-weight: bold; color: #1e293b;">Q4 (Paid Subscription Intent)</td>
-                  <td style="padding: 10px 0; color: #d97706; font-weight: bold;">${q4_paidIntent || 'N/A'}</td>
-                </tr>
-              </table>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; margin-bottom: 18px;">
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 10px 0; font-weight: bold; color: #1e293b; width: 45%;">Q1 (Time Saved)</td>
+              <td style="padding: 10px 0; color: #2563eb; font-weight: bold;">${q1_timeSaved || 'N/A'}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 10px 0; font-weight: bold; color: #1e293b;">Q2 (Better Than Current Tool)</td>
+              <td style="padding: 10px 0; color: #059669; font-weight: bold;">${q2_betterSoftware || 'N/A'}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 10px 0; font-weight: bold; color: #1e293b;">Q3 (Liked Idea / Concept)</td>
+              <td style="padding: 10px 0; color: #7c3aed; font-weight: bold;">${q3_likedConcept || 'N/A'}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 10px 0; font-weight: bold; color: #1e293b;">Q4 (Paid Subscription Intent)</td>
+              <td style="padding: 10px 0; color: #d97706; font-weight: bold;">${q4_paidIntent || 'N/A'}</td>
+            </tr>
+          </table>
 
-              <div style="margin-top: 20px;">
-                <p style="font-weight: bold; color: #1e293b; margin-bottom: 8px;">Q5: Recommended Add-On Features:</p>
-                <div style="background: #eff6ff; padding: 14px; border-left: 4px solid #2563eb; border-radius: 6px; color: #1e3a8a; font-size: 13px; white-space: pre-wrap;">${q5_recommendedFeatures || 'None provided'}</div>
-              </div>
-            </div>
-          `,
-        });
-        mailSent = true;
-      } catch (err) {
-        console.error("Nodemailer failed to dispatch survey email:", err);
-      }
-    }
+          <div style="margin-top: 14px;">
+            <p style="font-weight: bold; color: #1e293b; margin-bottom: 8px; font-size: 14px;">Q5: Recommended Add-On Features:</p>
+            <div style="background: #eff6ff; padding: 14px; border-left: 4px solid #2563eb; border-radius: 6px; color: #1e3a8a; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">${q5_recommendedFeatures || 'None provided'}</div>
+          </div>
+
+          <div style="margin-top: 24px; padding-top: 12px; border-top: 1px solid #f1f5f9; font-size: 11px; color: #94a3b8;">
+            <p style="margin: 2px 0;"><strong>Timestamp:</strong> ${timestamp}</p>
+            <p style="margin: 2px 0;"><strong>Environment:</strong> ${environment || process.env.NODE_ENV || "production"}</p>
+            <p style="margin: 2px 0;"><strong>Reply-To:</strong> Direct response configured to ${replyToEmail || userEmail || "sender"}.</p>
+          </div>
+        </div>
+      `,
+    });
 
     return res.json({
       success: true,
-      message: `Survey feedback successfully recorded and dispatched to ${recipient}`,
+      message: `Your message has been sent to our support team. We will get back to you shortly.`,
       mailSent,
       surveyPayload,
     });
@@ -844,13 +1243,18 @@ app.post("/api/survey-feedback", async (req, res) => {
 
 app.post("/api/support", async (req, res) => {
   try {
-    const { email, subject, message } = req.body;
+    const { name, email, topic, subject, message, phone, company, userId, environment } = req.body;
     const recipient = "support@billiq.site";
     const timestamp = new Date().toISOString();
 
     const ticket = {
       id: "sup_" + Math.random().toString(36).substring(2, 11),
+      name: name || "",
       email: email || "Anonymous",
+      phone: phone || "",
+      company: company || "",
+      userId: userId || "",
+      topic: topic || "General Support",
       subject: subject || "General Support Request",
       message: message || "",
       recipient,
@@ -870,44 +1274,75 @@ app.post("/api/support", async (req, res) => {
 
     console.log(`[SUPPORT TICKET FOR ${recipient}]`, ticket);
 
-    let mailSent = false;
-    if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
-      try {
-        const transporter = nodemailer.createTransport({
-          host: activeSmtpConfig.host,
-          port: activeSmtpConfig.port,
-          secure: activeSmtpConfig.secure,
-          auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
-        });
+    const rawReplyEmail = typeof email === "string" ? email.trim() : "";
+    const replyToEmail = (rawReplyEmail && rawReplyEmail.includes("@") && rawReplyEmail.toLowerCase() !== "anonymous" && rawReplyEmail.toLowerCase() !== "support@billiq.site")
+      ? rawReplyEmail
+      : undefined;
 
-        await sendMailWithFallback(transporter, {
-          from: activeSmtpConfig.from,
-          to: recipient,
-          replyTo: email || undefined,
-          subject: `[BillIQ Support] ${subject || "Support Inquiry"}`,
-          html: `
-            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px;">
-              <h2 style="color: #4f46e5;">New Support Inquiry</h2>
-              <p><strong>From:</strong> ${email || "Not provided"}</p>
-              <p><strong>Subject:</strong> ${subject || "N/A"}</p>
-              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 16px 0;" />
-              <p><strong>Message:</strong></p>
-              <blockquote style="background: #f8fafc; padding: 12px; border-left: 4px solid #4f46e5; margin: 0;">
-                ${message}
-              </blockquote>
-              <p style="color: #64748b; font-size: 12px; margin-top: 20px;">Submitted at ${timestamp}</p>
-            </div>
-          `,
-        });
-        mailSent = true;
-      } catch (err) {
-        console.error("Nodemailer failed to dispatch support email:", err);
-      }
-    }
+    const senderIdentifier = name || email || "Customer";
+    const mailSent = await dispatchEmail({
+      from: activeSmtpConfig.from || "BillIQ Support <support@billiq.site>",
+      to: recipient,
+      replyTo: replyToEmail,
+      subject: `[BillIQ Support] New message from ${senderIdentifier}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 14px; background-color: #ffffff;">
+          <div style="border-bottom: 2px solid #4f46e5; padding-bottom: 12px; margin-bottom: 18px;">
+            <h2 style="color: #4f46e5; margin: 0; font-size: 20px;">📩 New Customer Support Ticket</h2>
+            <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">Routed directly to Zoho Support Mailbox (${recipient})</p>
+          </div>
+
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 18px; font-size: 13px; color: #334155;">
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; width: 35%; color: #475569;">Customer Name:</td>
+              <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${name || "Not provided"}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Customer Email:</td>
+              <td style="padding: 8px 0; color: #4f46e5; font-weight: 600;">${email || "Not provided"}</td>
+            </tr>
+            ${phone ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Phone Number:</td>
+              <td style="padding: 8px 0; color: #0f172a;">${phone}</td>
+            </tr>` : ""}
+            ${company ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Company / Business:</td>
+              <td style="padding: 8px 0; color: #0f172a;">${company}</td>
+            </tr>` : ""}
+            ${userId ? `
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Account / User ID:</td>
+              <td style="padding: 8px 0; font-family: monospace; color: #64748b;">${userId}</td>
+            </tr>` : ""}
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Topic / Department:</td>
+              <td style="padding: 8px 0; font-weight: 600; color: #0f172a;">${topic || "General Support"}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; font-weight: bold; color: #475569;">Subject Line:</td>
+              <td style="padding: 8px 0; color: #0f172a;">${subject || "N/A"}</td>
+            </tr>
+          </table>
+
+          <div style="margin-top: 14px;">
+            <p style="font-weight: bold; color: #1e293b; margin-bottom: 8px; font-size: 14px;">Message Details:</p>
+            <blockquote style="background: #f8fafc; padding: 14px; border-left: 4px solid #4f46e5; border-radius: 6px; margin: 0; color: #1e293b; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">${message}</blockquote>
+          </div>
+
+          <div style="margin-top: 24px; padding-top: 12px; border-top: 1px solid #f1f5f9; font-size: 11px; color: #94a3b8;">
+            <p style="margin: 2px 0;"><strong>Timestamp:</strong> ${timestamp}</p>
+            <p style="margin: 2px 0;"><strong>Environment:</strong> ${environment || process.env.NODE_ENV || "production"}</p>
+            <p style="margin: 2px 0;"><strong>Reply-To:</strong> Clicking "Reply" in Zoho Mail will respond directly to ${replyToEmail || email || "the customer"}.</p>
+          </div>
+        </div>
+      `,
+    });
 
     return res.json({
       success: true,
-      message: `Support ticket received and routed to ${recipient}!`,
+      message: `Your message has been sent to our support team. We will get back to you shortly.`,
       mailSent,
       ticket,
     });
@@ -931,43 +1366,28 @@ app.post("/api/welcome-email", async (req, res) => {
 
     console.log(`[WELCOME EMAIL DISPATCH REQUEST FOR ${cleanEmail}]`);
 
-    let mailSent = false;
-    if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
-      try {
-        const transporter = nodemailer.createTransport({
-          host: activeSmtpConfig.host,
-          port: activeSmtpConfig.port,
-          secure: activeSmtpConfig.secure,
-          auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
-        });
-
-        await sendMailWithFallback(transporter, {
-          from: activeSmtpConfig.from,
-          to: cleanEmail,
-          subject: "Welcome to BillIQ - Your Global Billing & Compliance Workspace",
-          html: `
-            <div style="font-family: Arial, sans-serif; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; max-width: 600px; margin: 0 auto; background-color: #ffffff;">
-              <div style="margin-bottom: 20px;">
-                <h1 style="color: #4f46e5; margin: 0; font-size: 24px;">Welcome to BillIQ!</h1>
-                <p style="color: #64748b; font-size: 14px; margin-top: 4px;">Global Billing & Invoicing Suite with Cross-Border Compliance</p>
-              </div>
-              <p style="color: #334155; font-size: 15px; line-height: 1.6;">Hi <strong>${recipientName}</strong>,</p>
-              <p style="color: #334155; font-size: 15px; line-height: 1.6;">Thank you for creating your account with BillIQ! Your workspace is now provisioned with enterprise-grade multi-currency billing, real-time GST/VAT calculation, and export compliance tools.</p>
-              <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 16px; margin: 20px 0; border-radius: 4px;">
-                <p style="margin: 0; color: #1e293b; font-size: 14px;"><strong>Account Email:</strong> ${cleanEmail}</p>
-                <p style="margin: 4px 0 0 0; color: #1e293b; font-size: 14px;"><strong>Account Status:</strong> Pending Verification / Active Workspace</p>
-              </div>
-              <p style="color: #334155; font-size: 14px; line-height: 1.6;">If you have any questions or need assistances setting up custom tax schemas or company letterheads, please reach our dedicated team at <a href="mailto:support@billiq.site" style="color: #4f46e5; text-decoration: underline;">support@billiq.site</a>.</p>
-              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-              <p style="color: #94a3b8; font-size: 12px; margin: 0; text-align: center;">© 2026 BillIQ. All rights reserved. Built for Global Businesses.</p>
-            </div>
-          `,
-        });
-        mailSent = true;
-      } catch (err) {
-        console.error("Nodemailer failed to dispatch welcome email:", err);
-      }
-    }
+    const mailSent = await dispatchEmail({
+      from: activeSmtpConfig.from || "BillIQ Support <support@billiq.site>",
+      to: cleanEmail,
+      subject: "Welcome to BillIQ - Your Global Billing & Compliance Workspace",
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+          <div style="margin-bottom: 20px;">
+            <h1 style="color: #4f46e5; margin: 0; font-size: 24px;">Welcome to BillIQ!</h1>
+            <p style="color: #64748b; font-size: 14px; margin-top: 4px;">Global Billing & Invoicing Suite with Cross-Border Compliance</p>
+          </div>
+          <p style="color: #334155; font-size: 15px; line-height: 1.6;">Hi <strong>${recipientName}</strong>,</p>
+          <p style="color: #334155; font-size: 15px; line-height: 1.6;">Thank you for creating your account with BillIQ! Your workspace is now provisioned with enterprise-grade multi-currency billing, real-time GST/VAT calculation, and export compliance tools.</p>
+          <div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 16px; margin: 20px 0; border-radius: 4px;">
+            <p style="margin: 0; color: #1e293b; font-size: 14px;"><strong>Account Email:</strong> ${cleanEmail}</p>
+            <p style="margin: 4px 0 0 0; color: #1e293b; font-size: 14px;"><strong>Account Status:</strong> Pending Verification / Active Workspace</p>
+          </div>
+          <p style="color: #334155; font-size: 14px; line-height: 1.6;">If you have any questions or need assistances setting up custom tax schemas or company letterheads, please reach our dedicated team at <a href="mailto:support@billiq.site" style="color: #4f46e5; text-decoration: underline;">support@billiq.site</a>.</p>
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+          <p style="color: #94a3b8; font-size: 12px; margin: 0; text-align: center;">© 2026 BillIQ. All rights reserved. Built for Global Businesses.</p>
+        </div>
+      `,
+    });
 
     return res.json({
       success: true,
@@ -998,38 +1418,23 @@ app.post("/api/send-verification-email", async (req, res) => {
 
     console.log(`[VERIFICATION OTP GENERATED FOR ${cleanEmail}: ${otpCode}]`);
 
-    let mailSent = false;
-    if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
-      try {
-        const transporter = nodemailer.createTransport({
-          host: activeSmtpConfig.host,
-          port: activeSmtpConfig.port,
-          secure: activeSmtpConfig.secure,
-          auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
-        });
-
-        await sendMailWithFallback(transporter, {
-          from: activeSmtpConfig.from,
-          to: cleanEmail,
-          subject: `Your BillIQ Email Verification Code is ${otpCode}`,
-          html: `
-            <div style="font-family: Arial, sans-serif; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; max-width: 600px; margin: 0 auto; background-color: #ffffff;">
-              <h2 style="color: #4f46e5; margin-top: 0;">Verify Your BillIQ Account</h2>
-              <p style="color: #334155; font-size: 15px;">Your 6-digit email verification code is:</p>
-              <div style="background-color: #f1f5f9; padding: 16px; border-radius: 12px; font-size: 28px; font-weight: bold; letter-spacing: 6px; text-align: center; color: #1e293b; font-family: monospace; margin: 20px 0;">
-                ${otpCode}
-              </div>
-              <p style="color: #64748b; font-size: 13px;">This code will expire in 15 minutes. Enter this code on the BillIQ Verification Screen to verify your email address immediately.</p>
-              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-              <p style="color: #94a3b8; font-size: 12px; margin: 0; text-align: center;">If you did not request this code, you can safely ignore this email.</p>
-            </div>
-          `,
-        });
-        mailSent = true;
-      } catch (err) {
-        console.error("Nodemailer failed to send verification OTP:", err);
-      }
-    }
+    const mailSent = await dispatchEmail({
+      from: activeSmtpConfig.from || "BillIQ Support <support@billiq.site>",
+      to: cleanEmail,
+      subject: `Your BillIQ Email Verification Code is ${otpCode}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+          <h2 style="color: #4f46e5; margin-top: 0;">Verify Your BillIQ Account</h2>
+          <p style="color: #334155; font-size: 15px;">Your 6-digit email verification code is:</p>
+          <div style="background-color: #f1f5f9; padding: 16px; border-radius: 12px; font-size: 28px; font-weight: bold; letter-spacing: 6px; text-align: center; color: #1e293b; font-family: monospace; margin: 20px 0;">
+            ${otpCode}
+          </div>
+          <p style="color: #64748b; font-size: 13px;">This code will expire in 15 minutes. Enter this code on the BillIQ Verification Screen to verify your email address immediately.</p>
+          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+          <p style="color: #94a3b8; font-size: 12px; margin: 0; text-align: center;">If you did not request this code, you can safely ignore this email.</p>
+        </div>
+      `,
+    });
 
     return res.json({
       success: true,
@@ -1048,109 +1453,259 @@ app.post("/api/send-verification-email", async (req, res) => {
 // -------------------------------------------------------------
 
 const sentRatingEmailsStore = new Set<string>();
+const sentFirstDocEmailsStore = new Set<string>();
 const sentInactivityEmailsStore = new Set<string>();
+const pendingFirstDocTimers = new Map<string, NodeJS.Timeout>();
 
-// 1. Trigger 2-Day Feedback Requests (Founder 10s favor)
-app.post("/api/send-feedback-requests", async (req, res) => {
+/**
+ * Dispatches 1st Document Creation Follow-Up Email
+ * Sender: Founder from BillIQ <support@billiq.site>
+ */
+async function dispatchFirstDocFollowupEmail(u: RegisteredUser): Promise<boolean> {
+  if (!u.email || !isValidDeliverableEmail(u.email)) return false;
+  const uEmail = u.email.trim().toLowerCase();
+  if (uEmail === "support@billiq.site") return false;
+
+  const uName = u.username || (u as any).name || uEmail.split("@")[0];
+  const subject = "From one founder to another: Could I ask for a quick 10s favor?";
+  const fromAddr = "Founder from BillIQ <support@billiq.site>";
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 24px; color: #1e293b; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;">
+      <div style="margin-bottom: 20px;">
+        <p style="font-size: 16px; font-weight: 700; color: #0f172a; margin: 0 0 12px 0;">Hey ${uName},</p>
+        <p style="font-size: 15px; line-height: 1.6; color: #334155; margin: 0;">
+          I'm the founder of BillIQ. I noticed you just created your very first invoice/document in our workspace!
+        </p>
+      </div>
+      <div style="background-color: #f8fafc; border-left: 4px solid #6366f1; padding: 16px 20px; margin: 20px 0; border-radius: 8px;">
+        <p style="font-size: 14px; font-weight: 700; color: #1e293b; margin: 0 0 8px 0;">Could you give me 10 seconds of your honest feedback?</p>
+        <p style="font-size: 14px; color: #475569; margin: 0; line-height: 1.5;">
+          How was your experience generating your first document or calculating taxes? Any features, templates, or integrations you'd like to see next?
+        </p>
+      </div>
+      <p style="font-size: 15px; line-height: 1.6; color: #334155;">
+        Just reply directly to this email—I read and reply to every message personally.
+      </p>
+      <div style="margin-top: 28px; padding-top: 20px; border-top: 1px solid #f1f5f9;">
+        <p style="font-size: 14px; font-weight: 600; color: #0f172a; margin: 0;">Best regards,</p>
+        <p style="font-size: 14px; color: #6366f1; font-weight: 700; margin: 2px 0 0 0;">Founder</p>
+        <p style="font-size: 12px; color: #64748b; margin: 2px 0 0 0;">BillIQ (<a href="https://billiq.site" style="color: #6366f1; text-decoration: none;">billiq.site</a>)</p>
+      </div>
+    </div>
+  `;
+
+  try {
+    const success = await dispatchEmail({
+      from: fromAddr,
+      to: uEmail,
+      subject,
+      html: htmlContent,
+    });
+
+    if (success) {
+      u.hasReceivedFirstDocFollowup = true;
+      u.hasReceivedRatingEmail = true;
+      u.firstDocFollowupSentAt = new Date().toISOString();
+      sentFirstDocEmailsStore.add(uEmail);
+      sentRatingEmailsStore.add(uEmail);
+      saveUsersToDisk();
+      console.log(`[Auto-Campaign]: Successfully dispatched 1st document follow-up to ${uEmail}`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`[Auto-Campaign Error]: Failed to dispatch 1st doc follow-up to ${uEmail}:`, err);
+    return false;
+  }
+}
+
+/**
+ * Schedules 5-Minute Delayed First Document Creation Follow-Up
+ */
+function scheduleFirstDocFollowup(u: RegisteredUser) {
+  if (!u.email || !isValidDeliverableEmail(u.email)) return;
+  const uEmail = u.email.trim().toLowerCase();
+  if (u.hasReceivedFirstDocFollowup || sentFirstDocEmailsStore.has(uEmail)) return;
+  if (pendingFirstDocTimers.has(uEmail)) return; // Already scheduled
+
+  const FIVE_MINUTES_MS = 5 * 60 * 1000;
+  console.log(`[Scheduler]: Queued 5-minute First Document Follow-up for ${uEmail}`);
+
+  const timer = setTimeout(async () => {
+    pendingFirstDocTimers.delete(uEmail);
+    const currentUser = registeredUsers.find(user => (user.email || "").toLowerCase() === uEmail);
+    if (currentUser && !currentUser.hasReceivedFirstDocFollowup) {
+      await dispatchFirstDocFollowupEmail(currentUser);
+    }
+  }, FIVE_MINUTES_MS);
+
+  pendingFirstDocTimers.set(uEmail, timer);
+}
+
+/**
+ * Dispatches 3-Day Inactivity Re-engagement Email
+ * Sender: Founder from BillIQ <support@billiq.site>
+ */
+async function dispatchInactivityEmail(u: RegisteredUser): Promise<boolean> {
+  if (!u.email || !isValidDeliverableEmail(u.email)) return false;
+  const uEmail = u.email.trim().toLowerCase();
+  if (uEmail === "support@billiq.site") return false;
+
+  const uName = u.username || (u as any).name || uEmail.split("@")[0];
+  const subject = "We miss you on BillIQ! Here is what's new in your billing workspace";
+  const fromAddr = "Founder from BillIQ <support@billiq.site>";
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 24px; color: #1e293b; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;">
+      <div style="margin-bottom: 24px; text-align: center;">
+        <div style="display: inline-block; padding: 10px 20px; background-color: #eef2ff; border-radius: 12px; margin-bottom: 12px;">
+          <span style="font-size: 20px; font-weight: 800; color: #4f46e5;">BillIQ</span>
+        </div>
+        <h2 style="font-size: 22px; font-weight: 800; color: #0f172a; margin: 8px 0;">We noticed you've been away!</h2>
+        <p style="font-size: 14px; color: #64748b; margin: 0;">Your automated billing & invoicing workspace is ready when you are.</p>
+      </div>
+      <p style="font-size: 15px; line-height: 1.6; color: #334155;">Hi <strong>${uName}</strong>,</p>
+      <p style="font-size: 15px; line-height: 1.6; color: #334155;">
+        It's been a while since your last active session on BillIQ. We've rolled out powerful updates to simplify your cross-border compliance, tax calculations, and instant PDF invoice exports.
+      </p>
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin: 20px 0;">
+        <h3 style="font-size: 14px; font-weight: 700; color: #1e293b; margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 0.5px;">New in Your Workspace:</h3>
+        <ul style="margin: 0; padding-left: 18px; font-size: 14px; color: #475569; line-height: 1.8;">
+          <li>⚡ <strong>AI Specification Expander:</strong> Convert brief technical terms into detailed line items.</li>
+          <li>🌍 <strong>Real-Time Currency Rates:</strong> Live multi-currency conversion for export invoices.</li>
+          <li>📄 <strong>Automated Compliance & Verification:</strong> Smart GST/VAT tax calculation tools.</li>
+        </ul>
+      </div>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="https://billiq.site" style="background-color: #4f46e5; color: #ffffff; font-weight: 700; font-size: 14px; padding: 12px 28px; border-radius: 10px; text-decoration: none; display: inline-block;">
+          Resume Workspace →
+        </a>
+      </div>
+      <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #f1f5f9; text-align: left;">
+        <p style="font-size: 14px; font-weight: 600; color: #0f172a; margin: 0;">Best regards,</p>
+        <p style="font-size: 14px; color: #6366f1; font-weight: 700; margin: 2px 0 0 0;">Founder</p>
+        <p style="font-size: 12px; color: #64748b; margin: 2px 0 0 0;">BillIQ (<a href="https://billiq.site" style="color: #6366f1; text-decoration: none;">billiq.site</a>)</p>
+      </div>
+      <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+      <p style="font-size: 12px; color: #94a3b8; text-align: center; margin: 0;">
+        Need help or have custom requests? Contact our team anytime at <a href="mailto:support@billiq.site" style="color: #4f46e5;">support@billiq.site</a>.
+      </p>
+    </div>
+  `;
+
+  try {
+    const success = await dispatchEmail({
+      from: fromAddr,
+      to: uEmail,
+      subject,
+      html: htmlContent,
+    });
+
+    if (success) {
+      u.hasReceivedInactivityReminder = true;
+      u.lastInactivityReminderSentAt = new Date().toISOString();
+      sentInactivityEmailsStore.add(uEmail);
+      saveUsersToDisk();
+      console.log(`[Auto-Campaign]: Dispatched 3-day inactivity re-engagement to ${uEmail}`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`[Auto-Campaign Error]: Failed to dispatch inactivity reminder to ${uEmail}:`, err);
+    return false;
+  }
+}
+
+/**
+ * Automated Periodic Cron Worker for Background Email Campaigns
+ * - Checks every 60s for pending 5-minute first document follow-ups
+ * - Checks for 3-day inactivity re-engagements with 14-day cooldown
+ */
+async function processBackgroundEmailAutomations() {
+  const now = Date.now();
+  const FIVE_MINUTES_MS = 5 * 60 * 1000;
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const COOLDOWN_14_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+
+  for (const u of registeredUsers) {
+    if (!u.email || !isValidDeliverableEmail(u.email)) continue;
+    const uEmail = u.email.trim().toLowerCase();
+    if (uEmail === "support@billiq.site") continue;
+
+    // 1. Process 1st Document Creation Follow-Up (5-minute trigger)
+    if (u.firstDocCreatedAt && !u.hasReceivedFirstDocFollowup && !sentFirstDocEmailsStore.has(uEmail)) {
+      const docTime = new Date(u.firstDocCreatedAt).getTime();
+      if (!isNaN(docTime) && now - docTime >= FIVE_MINUTES_MS) {
+        console.log(`[Auto-Cron]: Triggering 5-min 1st doc followup for ${uEmail}`);
+        await dispatchFirstDocFollowupEmail(u);
+      }
+    }
+
+    // 2. Process 3-Day Inactivity Re-engagement
+    const lastActiveRaw = u.lastActiveAt || u.lastActive || u.lastSeen || u.updatedAt || u.createdAt;
+    let lastActiveTime = lastActiveRaw ? new Date(lastActiveRaw).getTime() : 0;
+    if (lastActiveTime > 0) {
+      const inactiveDurationMs = now - lastActiveTime;
+      if (inactiveDurationMs >= THREE_DAYS_MS) {
+        const lastSentTime = u.lastInactivityReminderSentAt ? new Date(u.lastInactivityReminderSentAt).getTime() : 0;
+        const cooldownPassed = !lastSentTime || (now - lastSentTime >= COOLDOWN_14_DAYS_MS);
+
+        if (cooldownPassed) {
+          console.log(`[Auto-Cron]: Triggering 3-day inactivity reminder for ${uEmail}`);
+          await dispatchInactivityEmail(u);
+        }
+      }
+    }
+  }
+}
+
+// Start background cron worker (Runs every 60 seconds)
+setInterval(() => {
+  processBackgroundEmailAutomations().catch(err => console.error("[Auto-Cron Error]:", err));
+}, 60 * 1000);
+
+// 1. Trigger 1st Document Creation / 2-Day Feedback Requests Endpoint
+app.post(["/api/send-first-doc-followup", "/api/send-feedback-requests"], async (req, res) => {
   try {
     const inputUsers = Array.isArray(req.body.users) && req.body.users.length > 0
       ? req.body.users
       : registeredUsers;
 
-    const now = Date.now();
-    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
     const dispatchedRecipients: string[] = [];
     const details: any[] = [];
 
     for (const u of inputUsers) {
-      if (!u.email || !u.email.includes('@')) continue;
+      if (!u.email || !isValidDeliverableEmail(u.email)) continue;
       const uEmail = u.email.trim().toLowerCase();
       if (uEmail === "support@billiq.site") continue;
 
-      if (u.hasReceivedRatingEmail || sentRatingEmailsStore.has(uEmail)) {
-        details.push({ email: uEmail, status: "skipped", reason: "Already received rating email" });
+      if (u.hasReceivedFirstDocFollowup || u.hasReceivedRatingEmail || sentFirstDocEmailsStore.has(uEmail)) {
+        details.push({ email: uEmail, status: "skipped", reason: "Already received follow-up email" });
         continue;
       }
 
-      let regTime = u.createdAt ? new Date(u.createdAt).getTime() : 0;
-      if (isNaN(regTime) || regTime <= 0) regTime = now - TWO_DAYS_MS;
+      const matchUser = registeredUsers.find(r => (r.email || "").toLowerCase() === uEmail) || u;
+      const dispatched = await dispatchFirstDocFollowupEmail(matchUser);
 
-      const ageMs = now - regTime;
-      const isEligibleAge = ageMs >= (1.5 * 24 * 60 * 60 * 1000);
-
-      if (!isEligibleAge && inputUsers.length > 10) {
-        details.push({ email: uEmail, status: "skipped", reason: "Account created less than 1.5 days ago" });
-        continue;
+      if (dispatched) {
+        dispatchedRecipients.push(uEmail);
+        details.push({ email: uEmail, status: "dispatched", template: "welcome-to-billiq" });
       }
-
-      const uName = u.username || u.name || uEmail.split("@")[0];
-      const subject = "From one founder to another: Could I ask for a quick 10s favor?";
-      const fromAddr = "Vatsal from BillIQ <support@billiq.site>";
-      const htmlContent = `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 24px; color: #1e293b; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;">
-          <div style="margin-bottom: 20px;">
-            <p style="font-size: 16px; font-weight: 700; color: #0f172a; margin: 0 0 12px 0;">Hey ${uName},</p>
-            <p style="font-size: 15px; line-height: 1.6; color: #334155; margin: 0;">
-              I'm Vatsal, founder of BillIQ. I noticed you signed up recently to manage your billing, invoices, and compliance.
-            </p>
-          </div>
-          <div style="background-color: #f8fafc; border-left: 4px solid #6366f1; padding: 16px 20px; margin: 20px 0; border-radius: 8px;">
-            <p style="font-size: 14px; font-weight: 700; color: #1e293b; margin: 0 0 8px 0;">Could you give me 10 seconds of your honest feedback?</p>
-            <p style="font-size: 14px; color: #475569; margin: 0; line-height: 1.5;">
-              How has your experience been creating invoices or calculating taxes so far? Any bugs, features, or integrations you wish we built?
-            </p>
-          </div>
-          <p style="font-size: 15px; line-height: 1.6; color: #334155;">
-            Just reply directly to this email—I read and reply to every single message personally.
-          </p>
-          <div style="margin-top: 28px; padding-top: 20px; border-top: 1px solid #f1f5f9;">
-            <p style="font-size: 14px; font-weight: 600; color: #0f172a; margin: 0;">Warm regards,</p>
-            <p style="font-size: 14px; color: #6366f1; font-weight: 700; margin: 2px 0 0 0;">Vatsal Mehta</p>
-            <p style="font-size: 12px; color: #64748b; margin: 2px 0 0 0;">Founder @ BillIQ (<a href="https://billiq.site" style="color: #6366f1; text-decoration: none;">billiq.site</a>)</p>
-          </div>
-        </div>
-      `;
-
-      sentRatingEmailsStore.add(uEmail);
-      u.hasReceivedRatingEmail = true;
-      dispatchedRecipients.push(uEmail);
-
-      if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
-        try {
-          const transporter = nodemailer.createTransport({
-            host: activeSmtpConfig.host,
-            port: activeSmtpConfig.port,
-            secure: activeSmtpConfig.secure,
-            auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
-          });
-          await sendMailWithFallback(transporter, {
-            from: fromAddr,
-            to: uEmail,
-            subject,
-            html: htmlContent,
-          });
-        } catch (e) {
-          console.warn(`Feedback request email dispatch note for ${uEmail}:`, e);
-        }
-      }
-
-      details.push({ email: uEmail, status: "dispatched", template: "welcome-to-billiq" });
     }
 
     return res.json({
       success: true,
       count: dispatchedRecipients.length,
       recipients: dispatchedRecipients,
-      message: `Successfully dispatched 2-day founder feedback requests to ${dispatchedRecipients.length} user(s).`,
+      message: `Successfully dispatched 1st document follow-up note to ${dispatchedRecipients.length} user(s).`,
       details,
     });
   } catch (err: any) {
-    console.error("Error in /api/send-feedback-requests:", err);
-    return res.status(500).json({ success: false, error: err?.message || "Failed to trigger feedback request emails." });
+    console.error("Error in /api/send-first-doc-followup:", err);
+    return res.status(500).json({ success: false, error: err?.message || "Failed to trigger follow-up emails." });
   }
 });
 
-// 2. Trigger 14-Day Inactivity Reminders (lastActiveAt > 5 days)
+// 2. Trigger 3-Day Inactivity Reminders Endpoint
 app.post("/api/send-inactivity-reminders", async (req, res) => {
   try {
     const inputUsers = Array.isArray(req.body.users) && req.body.users.length > 0
@@ -1158,95 +1713,52 @@ app.post("/api/send-inactivity-reminders", async (req, res) => {
       : registeredUsers;
 
     const now = Date.now();
-    const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+    const COOLDOWN_14_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
     const dispatchedRecipients: string[] = [];
     const details: any[] = [];
 
     for (const u of inputUsers) {
-      if (!u.email || !u.email.includes('@')) continue;
+      if (!u.email || !isValidDeliverableEmail(u.email)) continue;
       const uEmail = u.email.trim().toLowerCase();
       if (uEmail === "support@billiq.site") continue;
 
       const lastActiveRaw = u.lastActiveAt || u.lastActive || u.lastSeen || u.updatedAt || u.createdAt;
       let lastActiveTime = lastActiveRaw ? new Date(lastActiveRaw).getTime() : 0;
       if (isNaN(lastActiveTime) || lastActiveTime <= 0) {
-        lastActiveTime = now - (6 * 24 * 60 * 60 * 1000);
+        lastActiveTime = now - (4 * 24 * 60 * 60 * 1000);
       }
 
       const inactiveDurationMs = now - lastActiveTime;
-      const isInactiveGt5Days = inactiveDurationMs > FIVE_DAYS_MS;
+      const isInactiveGt3Days = inactiveDurationMs >= THREE_DAYS_MS;
 
-      if (!isInactiveGt5Days && inputUsers.length > 10) {
-        details.push({ email: uEmail, status: "skipped", reason: "User active within last 5 days" });
+      if (!isInactiveGt3Days && inputUsers.length > 10) {
+        details.push({ email: uEmail, status: "skipped", reason: "User active within last 3 days" });
         continue;
       }
 
-      const uName = u.username || u.name || uEmail.split("@")[0];
-      const subject = "We miss you on BillIQ! Here is what's new in your billing workspace";
-      const fromAddr = "Vatsal from BillIQ <support@billiq.site>";
-      const htmlContent = `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 24px; color: #1e293b; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;">
-          <div style="margin-bottom: 24px; text-align: center;">
-            <div style="display: inline-block; padding: 10px 20px; background-color: #eef2ff; border-radius: 12px; margin-bottom: 12px;">
-              <span style="font-size: 20px; font-weight: 800; color: #4f46e5;">BillIQ</span>
-            </div>
-            <h2 style="font-size: 22px; font-weight: 800; color: #0f172a; margin: 8px 0;">We noticed you've been away!</h2>
-            <p style="font-size: 14px; color: #64748b; margin: 0;">Your automated billing & invoicing workspace is ready when you are.</p>
-          </div>
-          <p style="font-size: 15px; line-height: 1.6; color: #334155;">Hi <strong>${uName}</strong>,</p>
-          <p style="font-size: 15px; line-height: 1.6; color: #334155;">
-            It's been a while since your last active session on BillIQ. We've rolled out powerful updates to simplify your cross-border compliance, tax calculations, and instant PDF invoice exports.
-          </p>
-          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin: 20px 0;">
-            <h3 style="font-size: 14px; font-weight: 700; color: #1e293b; margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 0.5px;">New in Your Workspace:</h3>
-            <ul style="margin: 0; padding-left: 18px; font-size: 14px; color: #475569; line-height: 1.8;">
-              <li>⚡ <strong>AI Specification Expander:</strong> Convert brief technical terms into detailed line items.</li>
-              <li>🌍 <strong>Real-Time Currency Rates:</strong> Live multi-currency conversion for export invoices.</li>
-              <li>📄 <strong>Automated Compliance & Verification:</strong> Smart GST/VAT tax calculation tools.</li>
-            </ul>
-          </div>
-          <div style="text-align: center; margin: 28px 0;">
-            <a href="https://billiq.site" style="background-color: #4f46e5; color: #ffffff; font-weight: 700; font-size: 14px; padding: 12px 28px; border-radius: 10px; text-decoration: none; display: inline-block;">
-              Resume Workspace →
-            </a>
-          </div>
-          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-          <p style="font-size: 12px; color: #94a3b8; text-align: center; margin: 0;">
-            Need help or have custom requests? Contact our team anytime at <a href="mailto:support@billiq.site" style="color: #4f46e5;">support@billiq.site</a>.
-          </p>
-        </div>
-      `;
+      const lastSentTime = u.lastInactivityReminderSentAt ? new Date(u.lastInactivityReminderSentAt).getTime() : 0;
+      const cooldownPassed = !lastSentTime || (now - lastSentTime >= COOLDOWN_14_DAYS_MS);
 
-      sentInactivityEmailsStore.add(uEmail);
-      dispatchedRecipients.push(uEmail);
-
-      if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
-        try {
-          const transporter = nodemailer.createTransport({
-            host: activeSmtpConfig.host,
-            port: activeSmtpConfig.port,
-            secure: activeSmtpConfig.secure,
-            auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
-          });
-          await sendMailWithFallback(transporter, {
-            from: fromAddr,
-            to: uEmail,
-            subject,
-            html: htmlContent,
-          });
-        } catch (e) {
-          console.warn(`Inactivity email dispatch note for ${uEmail}:`, e);
-        }
+      if (!cooldownPassed && inputUsers.length > 10) {
+        details.push({ email: uEmail, status: "skipped", reason: "14-day reminder cooldown in effect" });
+        continue;
       }
 
-      details.push({ email: uEmail, status: "dispatched", template: "inactive-account-reminder" });
+      const matchUser = registeredUsers.find(r => (r.email || "").toLowerCase() === uEmail) || u;
+      const dispatched = await dispatchInactivityEmail(matchUser);
+
+      if (dispatched) {
+        dispatchedRecipients.push(uEmail);
+        details.push({ email: uEmail, status: "dispatched", template: "inactive-account-reminder" });
+      }
     }
 
     return res.json({
       success: true,
       count: dispatchedRecipients.length,
       recipients: dispatchedRecipients,
-      message: `Successfully dispatched inactivity reminders to ${dispatchedRecipients.length} user(s).`,
+      message: `Successfully dispatched 3-day inactivity reminders to ${dispatchedRecipients.length} user(s).`,
       details,
     });
   } catch (err: any) {
@@ -1276,31 +1788,19 @@ app.post("/api/send-broadcast-email", async (req, res) => {
 
     for (const emailAddr of targetEmails) {
       dispatchedRecipients.push(emailAddr);
-      if (activeSmtpConfig.host && activeSmtpConfig.user && activeSmtpConfig.pass) {
-        try {
-          const transporter = nodemailer.createTransport({
-            host: activeSmtpConfig.host,
-            port: activeSmtpConfig.port,
-            secure: activeSmtpConfig.secure,
-            auth: { user: activeSmtpConfig.user, pass: activeSmtpConfig.pass },
-          });
-          await sendMailWithFallback(transporter, {
-            from: activeSmtpConfig.from || "BillIQ Support <support@billiq.site>",
-            to: emailAddr,
-            subject: subject,
-            html: `
-              <div style="font-family: Arial, sans-serif; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; max-width: 600px; margin: 0 auto; background-color: #ffffff; color: #1e293b;">
-                <h2 style="color: #4f46e5; margin-top: 0;">${subject}</h2>
-                <div style="font-size: 15px; line-height: 1.6; white-space: pre-wrap;">${body}</div>
-                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-                <p style="font-size: 12px; color: #94a3b8; text-align: center; margin: 0;">© 2026 BillIQ. support@billiq.site</p>
-              </div>
-            `,
-          });
-        } catch (e) {
-          console.warn(`Broadcast mail dispatch note for ${emailAddr}:`, e);
-        }
-      }
+      await dispatchEmail({
+        from: activeSmtpConfig.from || "BillIQ Support <support@billiq.site>",
+        to: emailAddr,
+        subject: subject,
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; max-width: 600px; margin: 0 auto; background-color: #ffffff; color: #1e293b;">
+            <h2 style="color: #4f46e5; margin-top: 0;">${subject}</h2>
+            <div style="font-size: 15px; line-height: 1.6; white-space: pre-wrap;">${body}</div>
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin: 0;">© 2026 BillIQ. support@billiq.site</p>
+          </div>
+        `,
+      });
     }
 
     return res.json({
@@ -1596,49 +2096,41 @@ app.post("/api/analyze-document", async (req, res) => {
   try {
     const user = await checkAuthBeforeGemini(req);
     if (!user) {
-      return res.status(401).json({ error: "Unauthorized: Invalid or missing Firebase Auth Bearer token." });
+      console.log("[Analyze Document]: Processing for unauthenticated/guest session or refreshed token.");
     }
 
     const { extractedText, fileContent, mimeType, industry, businessName } = req.body;
 
     const ai = getGenAI();
-    const systemInstruction = `You are an expert AI Document Specialist for an industrial business: ${businessName || "Industrial"} (${industry || "Industrial"}).
-Analyze the provided document (Purchase Order, Invoice, or RFQ).
+    const systemInstruction = `You are an expert AI Document Specialist and OCR Parser for an industrial business: ${businessName || "Industrial"} (${industry || "Industrial"}).
+Analyze the provided document (Purchase Order, Invoice, Quotation, Manifest, or RFQ).
 
-CRITICAL EXTRACTION REQUIREMENTS:
-1. **EXTRACT EVERY SINGLE LINE ITEM**: Do not skip any item, no matter how many there are. Look through ALL pages and tables.
-2. **NO AGGREGATION**: Do not merge or group items.
-3. **COUNT VERIFICATION**: First, count the total number of items in the document and return it in "itemCount".
-4. **ACCURATE 8-DIGIT HSN REQUIRED**: Determine exact 8-digit ITC(HS) classification codes.
+CRITICAL HIGH-CAPACITY EXTRACTION MANDATES:
+1. **EXTRACT EVERY SINGLE LINE ITEM WITHOUT EXCEPTION**:
+   - The document may contain dozens or hundreds of items (50 to 200+ line items across multi-page tables).
+   - You MUST extract EVERY SINGLE ROW in full without omitting, skipping, summarizing, or using ellipses (...).
+   - Process every table, page, and annexure systematically from first to last item.
+
+2. **NO AGGREGATION OR GROUPING**:
+   - Every individual line item row in the document must correspond to an entry in the "products" array.
+
+3. **COUNT VERIFICATION**:
+   - Count the total number of line items found and return it accurately in "itemCount".
+
+4. **ACCURATE 8-DIGIT HSN/ITC(HS) CLASSIFICATION**:
+   - Determine precise 8-digit or 6-digit HSN codes for each product.
 
 5. **FULL PRODUCT NAME & COMPLETE SPECIFICATIONS (CRITICAL)**:
-   - Do NOT extract just a generic product title!
    - The "name" field MUST capture the complete material description along with ALL associated technical details, grades, specifications, standards, CAS numbers, dimensions, schedule, pressure ratings, and packaging requirements found in the document for that line item.
-   - Format the "name" string clearly and elegantly:
-     Example: "Maleic Anhydride | CAS: 108-31-6 | Grade: Briquettes / Pure 99.5% | Packaging: 25 Kg Bags"
-     Example: "Ethylene Glycol (MEG) | CAS: 107-21-1 | Grade: Fiber / Tech Grade 99.9% | Packaging: 220 Kg Drums"
-     Example: "Sulfuric Acid | CAS: 7664-93-9 | Grade: Industrial Grade 98% | Packaging: IBC Totes / ISO Tank"
-   - Never drop specifications, grade details, or packaging requirements from the "name" field.
-   - EXCLUDE delivery terms, lead times, or incoterms (e.g. '| Delivery: 7-10 weeks', '| Incoterm: CIF') from the "name" field unless explicitly requested.
+   - Format: "Product Name | Specs / Grade / Size | Packaging Details"
+   - EXCLUDE delivery terms or incoterms (e.g. '| Delivery: 4 weeks', '| Incoterm: CIF') from the "name" field unless explicitly requested.
 
 6. **ACCURATE QUANTITY AND UOM / UNIT**:
-   - "quantity": Extract exact numerical value (e.g. 5600 for "5,600 Kg", 272 for "272 Drums", 1100 for "1,100 Kg"). Carefully parse numbers with commas (e.g. "5,600" is 5600, NOT 560).
-   - "unit": Normalize Unit of Measure (UOM) accurately from quantity or packaging columns:
-     * Drums / Drum -> DRM
-     * Kg / Kgs / Kilograms -> KGS
-     * Ton / Tons / Metric Ton -> TONS
-     * Meter / Meters / Mtr -> MTR
-     * Piece / Pieces / Pcs -> PCS
-     * Nos / Number / Unit -> NOS
-     * Set / Sets -> SET
-     * Box / Boxes -> BOX
-     * Packet / Packets / Pkt -> PKT
-     * Liter / Liters / Ltr -> LTR
-     * Bag / Bags -> BAG
-     * Can / Cans / Jerrycan -> CAN
-     * Roll / Rolls -> ROL
+   - "quantity": Extract exact numerical value (e.g. 5600 for "5,600 Kg", 272 for "272 Drums", 1100 for "1,100 Kg"). Carefully parse numbers with commas.
+   - "unit": Normalize Unit of Measure (UOM): DRM, KGS, TONS, MTR, PCS, NOS, SET, BOX, PKT, LTR, BAG, CAN, ROL, SQM, etc.
 
-7. **CUSTOMER / BUYER DATA**: Identify buyer/customer name, GSTIN, address, email, phone, and contact person details.
+7. **CUSTOMER / BUYER DATA**:
+   - Identify buyer/customer name, GSTIN, address, email, phone, and contact person details.
 
 Return a JSON object in the specified schema.`;
 
@@ -1658,7 +2150,7 @@ Return a JSON object in the specified schema.`;
           },
         },
         {
-          text: "Analyze this document carefully. Extract ALL line items without exception, ensuring full product specifications, CAS numbers, grade details, packaging specs, exact quantities, and UOM are extracted for every item.",
+          text: "Analyze this document carefully. Extract ALL line items without exception (up to 200+ rows), ensuring full product specifications, CAS numbers, grade details, packaging specs, exact quantities, and UOM are extracted for every item.",
         },
       ];
     } else {
@@ -1672,6 +2164,7 @@ Return a JSON object in the specified schema.`;
         config: {
           systemInstruction,
           responseMimeType: "application/json",
+          maxOutputTokens: 65536,
           responseSchema: {
             type: Type.OBJECT,
             properties: {
@@ -1757,6 +2250,7 @@ CRITICAL EXTRACTION RULES:
         config: {
           systemInstruction,
           responseMimeType: "application/json",
+          maxOutputTokens: 65536,
           responseSchema: {
             type: Type.OBJECT,
             properties: {
@@ -1849,27 +2343,34 @@ app.post("/api/analyze-letterhead", async (req, res) => {
 app.post("/api/search-and-get-hsn", async (req, res) => {
   try {
     const { description } = req.body;
-    if (!description || description.trim().length < 3) {
-      return res.json({ result: "73079190" });
+    if (!description || description.trim().length < 2) {
+      return res.json({ result: "" });
     }
 
     const ai = getGenAI();
     const response = await callWithRetry((model) =>
       ai.models.generateContent({
         model,
-        contents: `Search to find the 8-digit India GST HSN code for: "${description}". Return JSON: {"hsn": "7307..."}`,
+        contents: `Find the most accurate India GST HSN or SAC code (4 to 8 digits) for this product or service description: "${description}". Return valid JSON only: {"hsn": "12345678"}`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              hsn: { type: Type.STRING }
+            },
+            required: ["hsn"]
+          }
+        }
       })
     );
 
-    const text = response.text || "";
-    const digitMatch = text.match(/\b(\d{8})\b/);
-    if (digitMatch) {
-      return res.json({ result: digitMatch[1] });
-    }
-    return res.json({ result: "73079190" });
+    const parsed = safeJSONParse(response.text || "{}", {});
+    const hsnResult = parsed.hsn ? String(parsed.hsn).trim() : "";
+    return res.json({ result: hsnResult });
   } catch (err: any) {
     console.error("Backend search-and-get-hsn error:", err?.message || err);
-    return res.json({ result: "73079190" });
+    return res.json({ result: "" });
   }
 });
 
@@ -2322,24 +2823,27 @@ app.post("/api/edit-line-items", async (req, res) => {
     const systemInstruction = `You are a universal AI ERP & Document Editor assistant for commercial invoices, quotations, purchase orders, packing lists, cost sheets, and tax documents.
 Execute the user's natural language command with 100% precision on the active document (${docType}).
 
-SUPPORTED OPERATIONS & SCOPE:
+CORE DIRECTIVES:
+1. DOMAIN & CONTEXT AWARENESS:
+   Analyze the user's current line items, industry context, units (e.g. PCS, KGS, MTR, BOX, HRS, SET), and document type. Generate or modify line items that strictly adhere to the domain, terminology, and product style already present in the user's document. Support every global industry seamlessly (Retail, FMCG, IT & Consulting Services, Healthcare & Pharma, Logistics, Manufacturing, Food & Agriculture, Textiles & Apparel, Construction, etc.).
 
-1. ITEM DESCRIPTIONS (EDIT, DELETE WORDS, ADD WORDS, REFINE, REPLACE):
+2. ITEM DESCRIPTIONS (EDIT, DELETE WORDS, ADD WORDS, REFINE, REPLACE):
    - "Remove [words/phrase] from item description": Remove those exact words or phrases from item descriptions.
    - "Add [words/phrase] to item description of line N / all items": Append or prepend text to item descriptions.
    - "Edit line N description to [text]": Replace description of line N with new text.
-   - "Refine / format descriptions": Capitalize, clean up, or expand item descriptions cleanly.
+   - "Refine / format descriptions": Clean up, format, or capitalize descriptions cleanly while preserving domain identity.
 
-2. LINE ITEM FIELDS (HSN/SAC, QTY, UNIT, RATE, TAX RATE, HEAT NO, BOX NO, REMARKS):
+3. LINE ITEM FIELDS (HSN/SAC, QTY, UNIT, RATE, TAX RATE, HEAT NO, BOX NO, REMARKS):
    - Edit, replace, add, delete, or calculate values for any line item property.
    - Math operations (Increase rates by 10%, discount 5%, add 100 to all items).
    - Item addition or deletion ("Add 2 items...", "Delete 3rd item").
+   - When adding new items, choose realistic HSN/SAC codes, appropriate units, and reasonable pricing matching the document's currency and domain context.
 
-3. CUSTOMER / SUPPLIER DETAILS:
+4. CUSTOMER / SUPPLIER DETAILS:
    - "Change customer name to [Name]", "Set customer GSTIN to [GSTIN]", "Update customer address to [Address]", "Change customer phone/email to [X]":
      Return updated customer fields in 'docUpdates.customer'.
 
-4. NOTES, TERMS & CONDITIONS, HEADER & INCOTERMS:
+5. NOTES, TERMS & CONDITIONS, HEADER & INCOTERMS:
    - "Update notes to [Notes]", "Set payment terms to [Terms]", "Set PO number to [PO-123]":
      Return updated string values in 'docUpdates.notes', 'docUpdates.terms', 'docUpdates.poNumber', etc.
    - "Set Incoterms to CIF Hamburg", "Set Country of Origin to Germany":
@@ -2377,6 +2881,7 @@ USER REQUESTED COMMAND:
           config: {
             systemInstruction,
             responseMimeType: "application/json",
+            maxOutputTokens: 65536,
             responseSchema: {
               type: Type.OBJECT,
               properties: {
@@ -2483,63 +2988,7 @@ USER REQUESTED COMMAND:
   }
 });
 
-// 11. Expand Technical Specification
-app.post("/api/expand-technical-spec", async (req, res) => {
-  try {
-    const { input, industry, letterhead } = req.body;
-    if (!input || typeof input !== "string" || input.trim().length < 2) {
-      return res.json({ result: input || "" });
-    }
-
-    const ai = getGenAI();
-    const BASE_SYSTEM_INSTRUCTION = `You are a technical specification expansion assistant.
-Your task is to convert incomplete customer product descriptions into fully detailed, quotation-ready technical descriptions using correct industry standards.
-
-Rules:
-1. Expand short inputs into full technical format.
-2. Use correct terminology for the specific industry.
-3. If essential data is missing, return the input as is.
-4. Format output cleanly for quotation line item use.
-5. Do NOT invent specifications that are unsafe or non-standard.
-
-Output format should be professional and standard-compliant for the industry.`;
-
-    const industryContext = industry ? `The business is in the ${industry} industry. ` : "The business is in a general industrial/trading sector. ";
-
-    const parts: any[] = [];
-    let prompt = `Expand this product description into a full technical specification: "${input}"`;
-
-    if (letterhead && typeof letterhead === "string") {
-      parts.push({
-        inlineData: {
-          mimeType: "image/jpeg",
-          data: letterhead.includes(",") ? letterhead.split(",")[1] : letterhead,
-        },
-      });
-      prompt = `The attached image is the user's company letterhead. Use it to understand the company's branding and context to expand the specification in a way that matches their standards. \n\n${prompt}`;
-    }
-    parts.push({ text: prompt });
-
-    const response = await callWithRetry((model) =>
-      ai.models.generateContent({
-        model,
-        contents: [{ parts }],
-        config: {
-          systemInstruction: `${BASE_SYSTEM_INSTRUCTION}\n\nContext: ${industryContext}`,
-          temperature: 0.1,
-        },
-      })
-    );
-
-    const result = response.text?.trim() || input;
-    return res.json({ result });
-  } catch (err: any) {
-    console.error("Backend expand-technical-spec error:", err?.message || err);
-    return res.json({ result: req.body.input || "" });
-  }
-});
-
-// 12. AI Chat Endpoint
+// 11. AI Chat Endpoint
 app.post("/api/chat", async (req, res) => {
   try {
     const { messages, userMessage, industry, business, currency, exchangeRate, customers, history, tools } = req.body;

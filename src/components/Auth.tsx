@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Logo } from './Logo';
-import { signUpWithEmail, signInWithEmail, sendPasswordReset, sendPhoneOtp, verifyPhoneOtp, validateEmailStrict, signInWithGoogleToken } from '../services/auth';
+import { signUpWithEmail, signInWithEmail, sendPasswordReset, validateEmailStrict, signInWithGoogleToken } from '../services/auth';
 import { PrivacyPolicy } from './PrivacyPolicy';
 import { TermsAndConditions } from './TermsAndConditions';
 import { CookiePolicy } from './CookiePolicy';
-import { MfaChallengeModal } from './MfaChallengeModal';
-import { MultiFactorResolver, MultiFactorInfo } from 'firebase/auth';
+import { isDeveloperAccount, formatDetailedDeveloperError, getDisplayErrorMessage } from '../utils/errorUtils';
 import { 
   Shield, 
   Zap, 
@@ -18,10 +17,7 @@ import {
   Loader2,
   X,
   Check,
-  CheckCircle2,
-  Phone,
-  Smartphone,
-  KeyRound
+  CheckCircle2
 } from 'lucide-react';
 
 interface AuthProps {
@@ -58,21 +54,6 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
     return () => clearInterval(timer);
   }, [resetCooldown]);
 
-  // MFA Challenge State
-  const [mfaResolver, setMfaResolver] = useState<MultiFactorResolver | null>(null);
-  const [mfaHints, setMfaHints] = useState<MultiFactorInfo[]>([]);
-
-  // Auth Method Switcher
-  const [authMethod, setAuthMethod] = useState<'email' | 'phone'>('email');
-
-  // Phone Auth State
-  const [countryCode, setCountryCode] = useState('+91');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [sendingOtp, setSendingOtp] = useState(false);
-  const [verifyingOtp, setVerifyingOtp] = useState(false);
-
   // Dedicated Render Function for Google Sign-In Button
   const renderGoogleButton = () => {
     if ((window as any).google?.accounts?.id) {
@@ -87,7 +68,7 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
                 const res = await signInWithGoogleToken(response.credential);
                 if (res && onSuccess) onSuccess();
               } catch (err: any) {
-                setError(err?.message || "Google Sign-In failed.");
+                setError(getDisplayErrorMessage(err, email));
               } finally {
                 setLoading(false);
               }
@@ -127,95 +108,16 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
     }, 300);
 
     return () => clearInterval(interval);
-  }, [isSignUp, authMethod]);
+  }, [isSignUp]);
 
   const clearForm = (preserveEmail = false) => {
     setUsername('');
     if (!preserveEmail) setEmail('');
     setPassword('');
     setConfirmPassword('');
-    setPhoneNumber('');
-    setOtpCode('');
-    setOtpSent(false);
     setError(null);
     setInfoMessage(null);
     setAcceptedTerms(false);
-  };
-
-  const handleSendPhoneOtp = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setError(null);
-    setInfoMessage(null);
-
-    if (!acceptedTerms) {
-      setError('Please accept the Terms of Service and Privacy Policy to proceed.');
-      return;
-    }
-
-    const cleanPhone = phoneNumber.replace(/\D/g, '');
-    if (!cleanPhone || cleanPhone.length < 7) {
-      setError('Please enter a valid phone number (e.g., 9876543210).');
-      return;
-    }
-
-    const fullPhone = `${countryCode}${cleanPhone}`;
-    setSendingOtp(true);
-
-    try {
-      await sendPhoneOtp(fullPhone, 'recaptcha-container');
-      setOtpSent(true);
-      setInfoMessage(`6-digit OTP SMS sent to ${fullPhone}. Please enter the code below to complete ${isSignUp ? 'Sign Up' : 'Sign In'}.`);
-    } catch (err: any) {
-      console.error("Phone OTP send error:", err);
-      const code = err?.code || "";
-      const msg = err?.message || "";
-      if (code === 'auth/invalid-phone-number' || msg.includes('invalid-phone-number')) {
-        setError('Invalid phone number format. Please verify your country code and phone digits.');
-      } else if (code === 'auth/billing-not-enabled' || msg.includes('billing-not-enabled') || msg.includes('billing')) {
-        setError('Phone SMS Authentication requires a Firebase project with the Blaze plan enabled, or configured test phone numbers in Firebase Console. To test phone login, configure test numbers in Firebase Console > Authentication > Phone > Phone numbers for testing, or sign in with Email.');
-      } else if (code === 'auth/operation-not-allowed' || msg.includes('operation-not-allowed') || msg.includes('region enabled')) {
-        setError('Phone Authentication or SMS sending for this region is disabled in your Firebase Console. To enable it: Go to Firebase Console -> Authentication -> Sign-in method -> Phone (Enable) & Settings -> SMS region policy (allow your region). Alternatively, use Email Sign-In.');
-      } else if (code === 'auth/too-many-requests' || msg.includes('too-many-requests')) {
-        setError('Too many OTP SMS requests. Please wait a few minutes before trying again.');
-      } else if (code === 'auth/captcha-check-failed' || msg.includes('captcha')) {
-        setError('reCAPTCHA verification failed. Please try again.');
-      } else {
-        setError(msg || 'Failed to send OTP SMS. Please check your phone number and Firebase setup.');
-      }
-    } finally {
-      setSendingOtp(false);
-    }
-  };
-
-  const handleVerifyPhoneOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setInfoMessage(null);
-
-    const cleanOtp = otpCode.trim();
-    if (!cleanOtp || cleanOtp.length !== 6) {
-      setError('Please enter the full 6-digit OTP code sent via SMS.');
-      return;
-    }
-
-    setVerifyingOtp(true);
-    try {
-      await verifyPhoneOtp(cleanOtp);
-      if (onSuccess) onSuccess();
-    } catch (err: any) {
-      console.error("Phone OTP verify error:", err);
-      const code = err?.code || "";
-      const msg = err?.message || "";
-      if (code === 'auth/invalid-verification-code' || msg.includes('invalid-verification-code')) {
-        setError('Incorrect 6-digit OTP code. Please check your SMS messages and try again.');
-      } else if (code === 'auth/code-expired' || msg.includes('code-expired')) {
-        setError('OTP code has expired. Please click "Resend SMS Code" to receive a fresh OTP.');
-      } else {
-        setError(msg || 'Failed to verify OTP code. Please try again.');
-      }
-    } finally {
-      setVerifyingOtp(false);
-    }
   };
 
   const handleToggleMode = (signUpMode: boolean) => {
@@ -238,7 +140,11 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
       setResetCooldown(60);
     } catch (err: any) {
       console.error("Password reset error:", err);
-      setError(err?.message || 'Failed to send password reset email. Please verify your email/username.');
+      if (isDeveloperAccount(email)) {
+        setError(formatDetailedDeveloperError(err));
+      } else {
+        setError('An error occurred. Please try again or contact support.');
+      }
     } finally {
       setLoading(false);
     }
@@ -288,41 +194,35 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
       if (onSuccess) onSuccess();
     } catch (err: any) {
       console.warn("Auth submit notice:", err?.message || err);
-      const code = err?.code || "";
-      const msg = err?.message || "";
-
-      if (code === 'auth/multi-factor-auth-required' || err?.resolver) {
-        setMfaResolver(err.resolver);
-        setMfaHints(err.hints || err.resolver?.hints || []);
-        setError(null);
-      } else if (msg.includes('ACCOUNT_DELETED')) {
-        alert('This account was deleted by an administrator. Please create a new account to set up your password.');
-        setIsSignUp(true);
-        setError('This account was deleted by an administrator. Please create a new account.');
-      } else if (msg.includes('Username is already taken')) {
-        setError('Username is already taken. Please pick a different username, or switch to Sign In if you already created this account.');
-      } else if (code === 'auth/email-already-in-use' || msg.includes('email-already-in-use')) {
-        setIsSignUp(false);
-        setError('An account with this email address already exists. We have switched you to Sign In mode — please enter your password to log in, or click "Forgot Password?" below to reset it.');
-      } else if (code === 'auth/invalid-email' || msg.includes('invalid-email')) {
-        setError('Invalid email address format. If using a username, ensure you sign in with your registered username or email.');
-      } else if (
-        code === 'auth/wrong-password' || 
-        code === 'auth/user-not-found' || 
-        code === 'auth/invalid-credential' || 
-        msg.includes('invalid-credential') ||
-        msg.includes('user-not-found') ||
-        msg.includes('wrong-password')
-      ) {
-        setError('Invalid email/username or password. Please verify your credentials, or click below to reset your password or create a new account.');
-      } else if (code === 'auth/popup-blocked') {
-        setError('Sign-in popup was blocked by your browser. Please allow popups.');
-      } else if (code === 'auth/operation-not-allowed') {
-        setError('Email/Password sign-in is disabled in Firebase Console > Authentication > Sign-in method.');
-      } else if (code === 'auth/network-request-failed') {
-        setError('Network request failed. Embedded preview frames may block auth popups. Try opening in a new tab.');
+      if (isDeveloperAccount(email)) {
+        setError(formatDetailedDeveloperError(err));
       } else {
-        setError(msg || 'An error occurred during authentication.');
+        const code = err?.code || "";
+        const msg = err?.message || "";
+
+        if (msg.includes('ACCOUNT_DELETED')) {
+          alert('This account was deleted by an administrator. Please create a new account.');
+          setIsSignUp(true);
+          setError('This account was deleted by an administrator. Please create a new account.');
+        } else if (msg.includes('Username is already taken')) {
+          setError('Username is already taken. Please pick a different username, or switch to Sign In if you already created this account.');
+        } else if (code === 'auth/email-already-in-use' || msg.includes('email-already-in-use')) {
+          setIsSignUp(false);
+          setError('An account with this email address already exists. We have switched you to Sign In mode — please enter your password to log in, or click "Forgot Password?" below to reset it.');
+        } else if (code === 'auth/invalid-email' || msg.includes('invalid-email')) {
+          setError('Invalid email address format. If using a username, ensure you sign in with your registered username or email.');
+        } else if (
+          code === 'auth/wrong-password' || 
+          code === 'auth/user-not-found' || 
+          code === 'auth/invalid-credential' || 
+          msg.includes('invalid-credential') ||
+          msg.includes('user-not-found') ||
+          msg.includes('wrong-password')
+        ) {
+          setError('Invalid email/username or password. Please verify your credentials, or click below to reset your password or create a new account.');
+        } else {
+          setError('An error occurred. Please try again or contact support.');
+        }
       }
     } finally {
       setLoading(false);
@@ -371,15 +271,22 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
 
         {/* Right Side Form Panel */}
         <div className="md:col-span-7 p-6 sm:p-10 flex flex-col justify-center bg-white relative">
-          {onBackToLanding && (
-            <button
-              type="button"
-              onClick={onBackToLanding}
-              className="absolute top-4 right-4 sm:top-6 sm:right-6 text-xs font-semibold text-zinc-500 hover:text-brand-600 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 transition-all cursor-pointer"
-            >
-              ← Back to Home
-            </button>
-          )}
+          {/* Header Action Bar */}
+          <div className="flex items-center justify-between gap-3 mb-5">
+            {onBackToLanding ? (
+              <button
+                type="button"
+                onClick={onBackToLanding}
+                className="text-xs font-semibold text-zinc-600 hover:text-brand-600 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 transition-all cursor-pointer shadow-2xs"
+              >
+                ← Back to Home
+              </button>
+            ) : <div />}
+            <span className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+              {isSignUp ? "New Account" : "Secure Login"}
+            </span>
+          </div>
+
           {/* Tab Switcher Header */}
           <div className="flex bg-zinc-100 p-1 rounded-2xl mb-6">
             <button
@@ -461,7 +368,7 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
                           })
                           .catch((e: any) => {
                             console.error("Sign in failed:", e);
-                            setError(e?.message || 'Invalid password. Please check your credentials.');
+                            setError(getDisplayErrorMessage(e, email, 'Invalid password. Please check your credentials.'));
                           });
                       } else {
                         handleToggleMode(false);
@@ -508,7 +415,11 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
                     type="button"
                     onClick={() => {
                       navigator.clipboard.writeText(window.location.hostname);
-                      alert(`Copied domain: ${window.location.hostname}\n\nPaste this in Firebase Console > Authentication > Settings > Authorized domains.`);
+                      if (isDeveloperAccount(email)) {
+                        alert(`Copied domain: ${window.location.hostname}\n\nPaste this in Firebase Console > Authentication > Settings > Authorized domains.`);
+                      } else {
+                        alert(`Copied domain: ${window.location.hostname}`);
+                      }
                     }}
                     className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3 py-1 rounded-lg transition-colors inline-flex items-center gap-1 cursor-pointer"
                   >
@@ -540,218 +451,8 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
             </div>
           </div>
 
-          {/* Auth Method Switcher: Email vs Phone */}
-          <div className="flex bg-zinc-100 p-1 rounded-xl mb-5">
-            <button
-              type="button"
-              onClick={() => {
-                setAuthMethod('email');
-                setError(null);
-                setInfoMessage(null);
-              }}
-              className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                authMethod === 'email'
-                  ? 'bg-white text-brand-700 shadow-xs'
-                  : 'text-zinc-500 hover:text-zinc-800'
-              }`}
-            >
-              <Mail className="w-3.5 h-3.5" />
-              <span>Email & Password</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setAuthMethod('phone');
-                setError(null);
-                setInfoMessage(null);
-              }}
-              className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                authMethod === 'phone'
-                  ? 'bg-white text-brand-700 shadow-xs'
-                  : 'text-zinc-500 hover:text-zinc-800'
-              }`}
-            >
-              <Phone className="w-3.5 h-3.5" />
-              <span>Phone SMS OTP</span>
-            </button>
-          </div>
-
-          {/* Invisible Container for Firebase RecaptchaVerifier */}
-          <div id="recaptcha-container"></div>
-
-          {authMethod === 'phone' ? (
-            /* PHONE AUTH FLOW */
-            <div className="space-y-4">
-              {!otpSent ? (
-                /* Step 1: Request Phone Number */
-                <form onSubmit={handleSendPhoneOtp} className="space-y-3.5">
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                      Mobile Phone Number
-                    </label>
-                    <div className="flex gap-2">
-                      <select
-                        value={countryCode}
-                        onChange={(e) => setCountryCode(e.target.value)}
-                        className="px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs font-semibold text-zinc-800 focus:bg-white focus:ring-2 focus:ring-brand-500 outline-none transition-all cursor-pointer shrink-0"
-                      >
-                        <option value="+91">🇮🇳 +91 (India)</option>
-                        <option value="+1">🇺🇸 +1 (USA / Canada)</option>
-                        <option value="+44">🇬🇧 +44 (UK)</option>
-                        <option value="+971">🇦🇪 +971 (UAE)</option>
-                        <option value="+61">🇦🇺 +61 (Australia)</option>
-                        <option value="+65">🇸🇬 +65 (Singapore)</option>
-                        <option value="+49">🇩🇪 +49 (Germany)</option>
-                        <option value="+33">🇫🇷 +33 (France)</option>
-                        <option value="+81">🇯🇵 +81 (Japan)</option>
-                        <option value="+86">🇨🇳 +86 (China)</option>
-                        <option value="+966">🇸🇦 +966 (Saudi Arabia)</option>
-                        <option value="+27">🇿🇦 +27 (South Africa)</option>
-                      </select>
-
-                      <div className="relative flex-1">
-                        <Smartphone className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
-                        <input
-                          type="tel"
-                          required
-                          value={phoneNumber}
-                          onChange={(e) => setPhoneNumber(e.target.value)}
-                          placeholder="e.g. 9876543210"
-                          className="w-full pl-10 pr-3.5 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs font-medium text-zinc-900 focus:bg-white focus:ring-2 focus:ring-brand-500 outline-none transition-all"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Terms Checkbox for Phone */}
-                  <div className="flex items-start gap-2.5 pt-1">
-                    <input
-                      type="checkbox"
-                      id="termsCheckPhone"
-                      checked={acceptedTerms}
-                      onChange={(e) => {
-                        setAcceptedTerms(e.target.checked);
-                        if (error && error.includes('Terms of Service')) setError(null);
-                      }}
-                      className="mt-0.5 h-4 w-4 rounded border-zinc-300 text-brand-600 focus:ring-brand-500 cursor-pointer accent-brand-600"
-                    />
-                    <label htmlFor="termsCheckPhone" className="text-xs text-zinc-600 leading-normal select-none">
-                      I accept the{' '}
-                      <button
-                        type="button"
-                        onClick={() => setActivePolicyModal('terms')}
-                        className="font-bold text-brand-600 hover:underline cursor-pointer inline-block"
-                      >
-                        Terms of Service
-                      </button>{' '}
-                      and{' '}
-                      <button
-                        type="button"
-                        onClick={() => setActivePolicyModal('privacy')}
-                        className="font-bold text-brand-600 hover:underline cursor-pointer inline-block"
-                      >
-                        Privacy Policy
-                      </button>
-                      .
-                    </label>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={sendingOtp || !phoneNumber.trim() || !acceptedTerms}
-                    className={`w-full py-3 rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 mt-2 ${
-                      sendingOtp || !phoneNumber.trim() || !acceptedTerms
-                        ? 'bg-zinc-200 text-zinc-400 shadow-none cursor-not-allowed border border-zinc-200'
-                        : 'bg-brand-600 hover:bg-brand-700 text-white shadow-brand-500/20 cursor-pointer'
-                    }`}
-                  >
-                    {sendingOtp ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Sending SMS OTP...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>Send 6-Digit OTP SMS</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-                </form>
-              ) : (
-                /* Step 2: Enter 6-Digit OTP Code */
-                <form onSubmit={handleVerifyPhoneOtp} className="space-y-4">
-                  <div className="p-3 bg-brand-50/80 border border-brand-200 rounded-xl text-xs text-brand-900">
-                    <p className="font-semibold flex items-center gap-1.5 mb-1">
-                      <Smartphone className="w-4 h-4 text-brand-600 shrink-0" />
-                      <span>OTP Sent to {countryCode} {phoneNumber}</span>
-                    </p>
-                    <p className="text-[11px] text-brand-700">Check your mobile SMS messages for a 6-digit verification code.</p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-zinc-700 mb-1">
-                      Enter 6-Digit Verification Code
-                    </label>
-                    <div className="relative">
-                      <KeyRound className="w-4 h-4 text-zinc-400 absolute left-3.5 top-3" />
-                      <input
-                        type="text"
-                        maxLength={6}
-                        required
-                        value={otpCode}
-                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                        placeholder="e.g. 123456"
-                        className="w-full pl-10 pr-3.5 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-sm font-bold tracking-widest text-zinc-900 focus:bg-white focus:ring-2 focus:ring-brand-500 outline-none transition-all text-center"
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={verifyingOtp || otpCode.length !== 6}
-                    className={`w-full py-3 rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 ${
-                      verifyingOtp || otpCode.length !== 6
-                        ? 'bg-zinc-200 text-zinc-400 shadow-none cursor-not-allowed border border-zinc-200'
-                        : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/20 cursor-pointer'
-                    }`}
-                  >
-                    {verifyingOtp ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Verifying Code...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Verify & Complete {isSignUp ? 'Sign Up' : 'Sign In'}</span>
-                      </>
-                    )}
-                  </button>
-
-                  <div className="flex items-center justify-between text-xs pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setOtpSent(false)}
-                      className="font-semibold text-zinc-500 hover:text-zinc-800 underline cursor-pointer"
-                    >
-                      ← Change Phone Number
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSendPhoneOtp}
-                      disabled={sendingOtp}
-                      className="font-bold text-brand-600 hover:text-brand-700 underline cursor-pointer disabled:opacity-50"
-                    >
-                      {sendingOtp ? 'Sending...' : 'Resend OTP SMS'}
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
-          ) : (
-            /* Main Email Auth Form */
-            <form onSubmit={handleSubmit} className="space-y-3.5">
+          {/* Main Email Auth Form */}
+          <form onSubmit={handleSubmit} className="space-y-3.5">
             {isSignUp && (
               <div>
                 <label className="block text-xs font-semibold text-zinc-700 mb-1">Username / Full Name</label>
@@ -894,7 +595,6 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
               )}
             </button>
           </form>
-          )}
 
           {/* Mode Switch Prompt Footer */}
           <div className="mt-6 text-center pt-4 border-t border-zinc-100">
@@ -927,22 +627,6 @@ export const Auth: React.FC<AuthProps> = ({ onSuccess, initialSignUp = false, on
           </div>
         </div>
       </div>
-
-      {/* MFA Challenge Modal */}
-      {mfaResolver && (
-        <MfaChallengeModal
-          resolver={mfaResolver}
-          hints={mfaHints}
-          onSuccess={(user) => {
-            setMfaResolver(null);
-            if (onSuccess) onSuccess();
-          }}
-          onCancel={() => {
-            setMfaResolver(null);
-            setError('2-Step Verification cancelled.');
-          }}
-        />
-      )}
 
       {/* Policy View Modal */}
       {activePolicyModal && (

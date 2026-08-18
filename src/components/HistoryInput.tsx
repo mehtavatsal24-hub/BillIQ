@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { History, X, ChevronDown, Clock } from "lucide-react";
-import { getReferenceHistory, saveReferenceValue, removeReferenceValue } from "../utils/referenceHistory";
+import { getReferenceHistory, saveReferenceValue, removeReferenceValue, getActiveUserId } from "../utils/referenceHistory";
 
 interface HistoryInputProps {
   label?: string;
@@ -33,14 +33,17 @@ export const HistoryInput: React.FC<HistoryInputProps> = ({
   const [historyList, setHistoryList] = useState<string[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const activeUserId = userId || (typeof window !== "undefined" && (window as any).__CURRENT_USER_CONTEXT__?.userId) || undefined;
-  const optionsKey = (defaultOptions || []).join("|||");
+  const activeUserId = getActiveUserId(userId) || undefined;
 
   // Load history list whenever historyKey changes or on mount or activeUserId changes
   useEffect(() => {
+    if (!activeUserId) {
+      setHistoryList([]);
+      return;
+    }
     const list = getReferenceHistory(historyKey, defaultOptions, activeUserId);
     setHistoryList(list);
-  }, [historyKey, optionsKey, activeUserId]);
+  }, [historyKey, activeUserId]);
 
   // Handle click outside to close dropdown
   useEffect(() => {
@@ -54,6 +57,7 @@ export const HistoryInput: React.FC<HistoryInputProps> = ({
   }, []);
 
   const handleFocus = () => {
+    if (!activeUserId) return;
     const updated = getReferenceHistory(historyKey, defaultOptions, activeUserId);
     setHistoryList(updated);
     if (updated.length > 0) {
@@ -62,7 +66,7 @@ export const HistoryInput: React.FC<HistoryInputProps> = ({
   };
 
   const handleBlur = () => {
-    if (value && value.trim()) {
+    if (activeUserId && value && value.trim()) {
       saveReferenceValue(historyKey, value, activeUserId);
       const updated = getReferenceHistory(historyKey, defaultOptions, activeUserId);
       setHistoryList(updated);
@@ -71,12 +75,15 @@ export const HistoryInput: React.FC<HistoryInputProps> = ({
 
   const handleSelect = (selectedVal: string) => {
     onChange(selectedVal);
-    saveReferenceValue(historyKey, selectedVal, activeUserId);
+    if (activeUserId) {
+      saveReferenceValue(historyKey, selectedVal, activeUserId);
+    }
     setIsOpen(false);
   };
 
   const handleRemove = (e: React.MouseEvent, itemToRemove: string) => {
     e.stopPropagation();
+    if (!activeUserId) return;
     const updated = removeReferenceValue(historyKey, itemToRemove, activeUserId);
     setHistoryList(updated);
   };

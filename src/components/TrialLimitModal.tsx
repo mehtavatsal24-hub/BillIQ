@@ -10,6 +10,7 @@ interface TrialLimitModalProps {
   planTier?: string;
   maxLimit?: number;
   isReRegisteredUser?: boolean;
+  documentsRemaining?: number;
   customMessage?: string;
 }
 
@@ -21,9 +22,15 @@ export const TrialLimitModal: React.FC<TrialLimitModalProps> = ({
   planTier,
   maxLimit = 5,
   isReRegisteredUser = false,
+  documentsRemaining,
   customMessage,
 }) => {
   if (!isOpen) return null;
+
+  // If user has bonus/granted credits remaining or is on paid tier, never show limit modal
+  if (documentsRemaining !== undefined && documentsRemaining > 0) {
+    return null;
+  }
 
   const pTier = (planTier || planName || "").toLowerCase();
   if (pTier.includes("pro") || pTier.includes("enterprise") || pTier.includes("admin") || maxLimit === Infinity) {

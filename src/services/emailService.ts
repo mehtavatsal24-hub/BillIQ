@@ -10,6 +10,32 @@ export interface EmailTriggerResult {
   details?: any[];
 }
 
+export function isDeliverableEmail(email: any): boolean {
+  if (!email || typeof email !== 'string') return false;
+  let clean = email.trim().toLowerCase();
+  const match = clean.match(/<([^>]+)>/);
+  if (match && match[1]) clean = match[1].trim();
+
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  if (!emailRegex.test(clean)) return false;
+
+  const dummyDomains = [
+    'example.com',
+    'example.org',
+    'example.net',
+    'test.com',
+    'domain.com',
+    'sample.com',
+    'invalid.com',
+    'invalid',
+    'smartbill.ai',
+    'localhost',
+  ];
+  const domain = clean.split('@')[1];
+  if (!domain || dummyDomains.includes(domain)) return false;
+  return true;
+}
+
 /**
  * Dispatches welcome email to a new user upon registration.
  */
@@ -36,7 +62,7 @@ export async function sendWelcomeEmail(email: string, name?: string): Promise<{ 
  * Checks for users registered ~2 days ago who have not received the rating email.
  * Sends email via Resend template (welcome-to-billiq founder note) with subject:
  * "From one founder to another: Could I ask for a quick 10s favor?"
- * From: "Vatsal from BillIQ <support@billiq.site>"
+ * From: "Founder from BillIQ <support@billiq.site>"
  */
 export async function sendFeedbackRequestEmails(): Promise<EmailTriggerResult> {
   try {
@@ -72,8 +98,8 @@ export async function sendFeedbackRequestEmails(): Promise<EmailTriggerResult> {
       usersList = getDefaultUsers();
     }
 
-    // Filter out missing or invalid user emails
-    usersList = usersList.filter((u) => u && u.email && u.email.includes('@'));
+    // Filter out missing or non-deliverable dummy emails
+    usersList = usersList.filter((u) => u && isDeliverableEmail(u.email));
 
     // Now call backend endpoint to process & dispatch 2-day feedback emails
     const res = await fetch("/api/send-feedback-requests", {
@@ -139,8 +165,8 @@ export async function sendInactivityReminders(): Promise<EmailTriggerResult> {
       usersList = getDefaultUsers();
     }
 
-    // Filter out missing or invalid user emails
-    usersList = usersList.filter((u) => u && u.email && u.email.includes('@'));
+    // Filter out missing or non-deliverable dummy emails
+    usersList = usersList.filter((u) => u && isDeliverableEmail(u.email));
 
     // Call backend endpoint to process & dispatch inactivity reminders
     const res = await fetch("/api/send-inactivity-reminders", {
@@ -200,3 +226,70 @@ export async function sendBroadcastEmail(
     };
   }
 }
+
+/**
+ * Dispatches customer support inquiry directly to official Zoho Support Mailbox (support@billiq.site)
+ */
+export async function sendSupportInquiry(payload: {
+  name?: string;
+  email: string;
+  topic?: string;
+  subject?: string;
+  message: string;
+  phone?: string;
+  company?: string;
+  userId?: string;
+}): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await fetch("/api/support", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    return {
+      success: data.success ?? res.ok,
+      message: data.message || "Your message has been sent to our support team. We will get back to you shortly.",
+    };
+  } catch (err: any) {
+    console.error("Error sending support inquiry:", err);
+    return {
+      success: false,
+      message: err?.message || "Failed to send support message.",
+    };
+  }
+}
+
+/**
+ * Dispatches customer feedback directly to official Zoho Support Mailbox (support@billiq.site)
+ */
+export async function sendUserFeedback(payload: {
+  category?: string;
+  rating?: number;
+  feedbackText: string;
+  userEmail?: string;
+  userName?: string;
+  companyName?: string;
+  phone?: string;
+  userId?: string;
+}): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    return {
+      success: data.success ?? res.ok,
+      message: data.message || "Your message has been sent to our support team. We will get back to you shortly.",
+    };
+  } catch (err: any) {
+    console.error("Error sending user feedback:", err);
+    return {
+      success: false,
+      message: err?.message || "Failed to send feedback.",
+    };
+  }
+}
+

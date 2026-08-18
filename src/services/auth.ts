@@ -12,7 +12,6 @@ import {
   updatePassword,
   EmailAuthProvider,
   linkWithCredential,
-  getMultiFactorResolver,
   RecaptchaVerifier,
   signInWithPhoneNumber,
   GoogleAuthProvider,
@@ -146,6 +145,8 @@ export const signInWithGoogleToken = async (idToken: string) => {
         trialExhausted: false,
         documentsRemaining: defaultRole === 'admin' ? 999999 : 5,
         documentsUsed: 0,
+        lifetimeCreatedCount: 0,
+        totalGeneratedDocsCount: 0,
         planTier: defaultRole === 'admin' ? 'enterprise' : 'free_trial',
         planName: defaultRole === 'admin' ? 'Enterprise Admin' : 'Free Trial',
         plan: defaultRole === 'admin' ? 'Enterprise Admin' : 'Free Trial'
@@ -171,6 +172,13 @@ export const signInWithGoogleToken = async (idToken: string) => {
       }
       await setDoc(userDocRef, updates, { merge: true });
     }
+
+    // Sync login event to backend server for active analytics
+    fetch('/api/track-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: user.uid, email, username: displayName })
+    }).catch(() => {});
   }
 
   return user;
@@ -262,7 +270,9 @@ export const handleEmailSignUp = async (email: string, pass: string, name: strin
       updatedAt: new Date().toISOString(),
       trialExhausted: isTrialExhausted,
       documentsRemaining: defaultRole === 'admin' ? 999999 : (isTrialExhausted ? 0 : 5),
-      documentsUsed: 0,
+      documentsUsed: isTrialExhausted ? 5 : 0,
+      lifetimeCreatedCount: isTrialExhausted ? 5 : 0,
+      totalGeneratedDocsCount: isTrialExhausted ? 5 : 0,
       planTier: defaultRole === 'admin' ? 'enterprise' : (isTrialExhausted ? 'expired' : 'free_trial'),
       planName: defaultRole === 'admin' ? 'Enterprise Admin' : (isTrialExhausted ? 'Trial Expired' : 'Free Trial'),
       plan: defaultRole === 'admin' ? 'Enterprise Admin' : (isTrialExhausted ? 'Trial Expired' : 'Free Trial')
@@ -270,6 +280,19 @@ export const handleEmailSignUp = async (email: string, pass: string, name: strin
 
     await setDoc(doc(db, 'users', user.uid), userData, { merge: true });
   }
+
+  // Record registration and initial login in backend database
+  fetch('/api/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: name || cleanEmail.split('@')[0], email: cleanEmail })
+  }).catch(() => {});
+
+  fetch('/api/track-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: user.uid, email: cleanEmail, username: name || cleanEmail.split('@')[0] })
+  }).catch(() => {});
 
   return user;
 };
@@ -287,6 +310,13 @@ export const handleEmailSignIn = async (email: string, pass: string) => {
   try {
     localStorage.setItem('billiq_is_logged_in', 'true');
   } catch {}
+
+  // Sync login event to backend server for active analytics
+  fetch('/api/track-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: user.uid, email: cleanEmail, username: user.displayName || cleanEmail.split('@')[0] })
+  }).catch(() => {});
 
   if (db) {
     (async () => {
@@ -414,6 +444,8 @@ export const syncUserProfileToFirestore = async (
         planName: initialPlanName,
         documentsRemaining: initialDocsRem,
         documentsUsed: trialInfo.documentsUsed,
+        lifetimeCreatedCount: trialInfo.lifetimeCreatedCount ?? trialInfo.documentsUsed,
+        totalGeneratedDocsCount: trialInfo.lifetimeCreatedCount ?? trialInfo.documentsUsed,
         trialUsed: true,
         trialExhausted: isExhausted,
         isReRegisteredUser: isReReg,
@@ -527,39 +559,8 @@ export const signInWithEmail = async (emailOrUsername: string, pass: string) => 
     }
   }
 
-  try {
-    const userData = await handleEmailSignIn(targetEmail, pass);
-    return auth.currentUser;
-  } catch (error: any) {
-    if (error.code === 'auth/multi-factor-auth-required') {
-      const resolver = getMultiFactorResolver(auth, error);
-      const mfaError: any = new Error('MULTI_FACTOR_AUTH_REQUIRED');
-      mfaError.code = 'auth/multi-factor-auth-required';
-      mfaError.resolver = resolver;
-      mfaError.hints = resolver.hints;
-      throw mfaError;
-    }
-    throw error;
-  }
-};
-
-// Explicit MFA sign in handler
-export const handleSignInWithMfa = async (email: string, pass: string) => {
-  if (!auth) throw new Error("Firebase Authentication is not initialized.");
-  try {
-    const userCredential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), pass);
-    return { status: 'SUCCESS', user: userCredential.user };
-  } catch (error: any) {
-    if (error.code === 'auth/multi-factor-auth-required') {
-      const resolver = getMultiFactorResolver(auth, error);
-      return {
-        status: 'MFA_REQUIRED',
-        resolver,
-        hints: resolver.hints
-      };
-    }
-    throw error;
-  }
+  const userData = await handleEmailSignIn(targetEmail, pass);
+  return auth.currentUser;
 };
 
 // Send Password Reset Email
@@ -613,15 +614,61 @@ export const subscribeToAuthChanges = (callback: (user: User | null) => void) =>
   });
 };
 
-// Sign Out
+// Sign Out & Comprehensive Data / Session State Purge
 export const logoutUser = async () => {
   try {
-    localStorage.removeItem('billiq_is_logged_in');
-    localStorage.removeItem('billiq_has_entered_app');
-    localStorage.removeItem('billiq_active_view');
-    localStorage.removeItem('active_app_route');
-    localStorage.removeItem('active_app_step');
-  } catch {}
+    if (typeof window !== 'undefined') {
+      // 1. Collect and delete all user-related, business, invoice, contact, and cached document keys
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key) continue;
+
+        // Strictly protect non-sensitive global UI preferences like theme or language if any
+        if (key === 'theme' || key === 'language') {
+          continue;
+        }
+
+        // Purge all user data, cached documents, session state, and credentials
+        if (
+          key.startsWith('billiq_') ||
+          key.startsWith('active_') ||
+          key.includes('business_') ||
+          key.includes('saved_customers') ||
+          key.includes('saved_suppliers') ||
+          key.includes('document_history') ||
+          key.includes('last_used_') ||
+          key.includes('price_history') ||
+          key.includes('pdf_layout') ||
+          key.includes('autosave_') ||
+          key.includes('sync_id') ||
+          key.includes('user_profile') ||
+          key.includes('impersonat')
+        ) {
+          keysToRemove.push(key);
+        }
+      }
+
+      keysToRemove.forEach((k) => {
+        try {
+          localStorage.removeItem(k);
+        } catch {}
+      });
+
+      // 2. Clear all session storage tokens and state
+      try {
+        sessionStorage.clear();
+      } catch {}
+
+      // 3. Clear window user context
+      try {
+        delete (window as any).__CURRENT_USER_CONTEXT__;
+      } catch {}
+    }
+  } catch (err) {
+    console.warn("Notice during logout data purge:", err);
+  }
+
   if (!auth) return;
   return await signOut(auth);
 };

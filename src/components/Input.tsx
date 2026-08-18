@@ -47,9 +47,14 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           )}
           <input
             ref={ref}
+            draggable={false}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              props.onMouseDown?.(e);
+            }}
             onWheel={(e) => props.type === "number" && e.currentTarget.blur()}
             className={cn(
-              "w-full py-3 bg-white border border-zinc-200 rounded-xl text-sm transition-all duration-200",
+              "w-full py-3 bg-white border border-zinc-200 rounded-xl text-sm transition-all duration-200 select-text",
               getPaddingClass(),
               "focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500",
               "placeholder:text-zinc-300 placeholder:font-medium",

@@ -26,6 +26,11 @@
   body {
     @apply bg-zinc-50 text-zinc-900 antialiased selection:bg-brand-100 selection:text-brand-900;
   }
+
+  input, textarea, select {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
 }
 
 @layer components {
@@ -88,4 +93,105 @@
 
 ::-webkit-scrollbar-thumb {
   @apply bg-zinc-300 rounded-full hover:bg-zinc-400 transition-colors;
+}
+
+/* ==========================================================================
+   PRINT & PDF LAYOUT REFINEMENTS
+   - Dynamic Cell Padding, Auto-Height & Layout Expansion
+   - Transparent canvas/container body backgrounds for pre-printed letterhead passthrough
+   - Dark header banner ("black head"), table headers, badges & accents preserved
+   - Crisp table borders and page break boundaries
+   ========================================================================== */
+
+@media print {
+  html, body {
+    background-color: transparent !important;
+    background: transparent !important;
+    color: #18181b !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Transparent Body & Dynamic Container Backgrounds */
+  .printable-document,
+  .invoice-paper,
+  .document-preview-container,
+  .pdf-content-body,
+  .doc-sheet,
+  .document-body,
+  [data-document-container] {
+    background-color: transparent !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* Dynamic Cell Padding, Auto-Height & Layout Expansion */
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  th, td {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Retain Distinct Header Banners & Highlight Accents */
+  .doc-dark-header,
+  .document-title-badge,
+  .table-header-dark,
+  thead th,
+  [data-doc-header],
+  .bg-zinc-900,
+  .bg-black,
+  .bg-slate-900,
+  .bg-zinc-800 {
+    background-color: #18181b !important;
+    color: #ffffff !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .bg-zinc-900 *,
+  .bg-black *,
+  .bg-slate-900 *,
+  .bg-zinc-800 * {
+    color: #ffffff !important;
+  }
+
+  /* Badges, summary chips and highlight accents */
+  .badge-highlight,
+  .chip-accent,
+  .status-badge {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Crisp borders */
+  .border,
+  .border-zinc-200,
+  .border-zinc-300,
+  table,
+  th,
+  td {
+    border-color: #d4d4d8 !important;
+  }
+
+  /* Page break rules to prevent awkward breaks */
+  tr,
+  .avoid-page-break,
+  .document-section,
+  .invoice-header,
+  .invoice-totals,
+  .invoice-signatures {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
 }

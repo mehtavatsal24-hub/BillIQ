@@ -51,12 +51,19 @@ import {
   Lock,
   Mail,
   UserCheck,
-  HelpCircle
+  HelpCircle,
+  FileSpreadsheet,
+  BarChart3,
+  TrendingUp,
+  Gift,
+  ArrowRight
 } from "lucide-react";
+import { Analytics } from "@vercel/analytics/react";
 import { smartAnalyzeDimensionalReport, checkTolerances, smartGenerateMtcData } from './services/geminiService';
 import { motion, AnimatePresence } from "motion/react";
 import JSZip from "jszip";
 import { getUniquePhysicalBoxesCount } from "./lib/boxUtils";
+import { getDisplayErrorMessage, isDeveloperAccount, formatDetailedDeveloperError } from "./utils/errorUtils";
 import { 
   BusinessDetails, 
   CustomerDetails, 
@@ -116,9 +123,11 @@ import { LandedCostSheet } from "./components/LandedCostSheet";
 import { BulkEditor } from "./components/BulkEditor";
 import { CustomerSelector } from "./components/CustomerSelector";
 import { Dashboard } from "./components/Dashboard";
+import { AnalyticsView } from "./components/AnalyticsView";
 import { PartyList } from "./components/PartyList";
 import { generateInvoicePDF, downloadInvoicePDF } from "./services/pdfService";
 import { exportLandedCostSheetToExcel, exportInvoiceDataToLandedCostExcel } from "./services/excelService";
+import { exportCurrentDocumentItemsToCSV } from "./utils/csvExport";
 import { generateInvoiceNotes, analyzeCustomerPatterns, analyzeLetterhead, editLineItemsWithAI } from "./services/geminiService";
 import { markEditedLineItems } from "./utils/itemUtils";
 import { HistoryList } from "./components/HistoryList";
@@ -126,8 +135,21 @@ import { Footer } from "./components/Footer";
 import { PDFCustomizer } from "./components/PDFCustomizer";
 import { GenerateChallanModal } from "./components/GenerateChallanModal";
 import { BoxDimensionsTable, BoxDimension } from "./components/BoxDimensionsTable";
+import { aggregateLineItemsForBoxes, convertAggregatedBoxesToPackingBoxes, AggregatedBoxRow } from "./utils/packingListAggregation";
 import { AIChat } from "./components/AIChat";
-import { saveToCloud, loadFromCloud, deleteUserAccount, handleFirestoreError, OperationType, getUserDocumentsFromCloud, getLocalCachedDocuments, subscribeToUserDoc } from "./services/dbService";
+import { 
+  saveToCloud, 
+  loadFromCloud, 
+  deleteUserAccount, 
+  handleFirestoreError, 
+  OperationType, 
+  getUserDocumentsFromCloud, 
+  getLocalCachedDocuments, 
+  subscribeToUserDoc,
+  saveDocumentRecordToCloud,
+  deleteDocumentRecordFromCloud,
+  subscribeToUserDocuments
+} from "./services/dbService";
 import { logUserActivity, logErrorEvent } from "./services/auditLogger";
 import { isConfigValid, db, auth } from "./services/firebase";
 import { logoutUser, syncUserProfileToFirestore } from "./services/auth";
@@ -135,7 +157,6 @@ import { doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { Auth } from "./components/Auth";
 import { EmailVerificationScreen } from "./components/EmailVerificationScreen";
-import { MfaSettings } from "./components/MfaSettings";
 import { LandingPage } from "./components/LandingPage";
 import { FeaturesPage } from "./components/FeaturesPage";
 import { PrivacyPolicy } from "./components/PrivacyPolicy";
@@ -154,10 +175,18 @@ import { PaymentTermsInput } from "./components/PaymentTermsInput";
 import { calculateDueDate, formatDateToYYYYMMDD } from "./utils/dateUtils";
 import { autoSaveContactIfNew, getUserContacts, saveUserContact, ContactEntity } from "./utils/contactUtils";
 import { seedReferenceHistoryFromDocumentHistory, saveReferenceValue } from "./utils/referenceHistory";
-import { COUNTRIES, ALL_CURRENCIES, getCountryConfig, getCurrencySymbol } from "./utils/localization";
+import { COUNTRIES, ALL_CURRENCIES, getCountryConfig, getCurrencySymbol, getTaxName, getRegionTaxLabel } from "./utils/localization";
 import { AdminDashboard, ADMIN_UID, isAdminUser } from "./components/AdminDashboard";
+import { AdminPinModal, ADMIN_DEFAULT_PIN, ADMIN_RESET_EMAIL } from "./components/AdminPinModal";
 import { Logo } from "./components/Logo";
 import { getPlanDetails } from "./utils/planUtils";
+import { 
+  consumeUserDocumentCredit, 
+  getEffectiveLifetimeDocCount, 
+  setLocalUserDocCount, 
+  getLocalUserDocCount, 
+  incrementLocalUserDocCount 
+} from "./services/trialService";
 
 const QA_QC_RISK_ITEMS = [
   "Mixed Heat Prevention Physical Segregation & Heat Code Verification",
@@ -375,7 +404,7 @@ const getStorageKey = (key: string, userId?: string | null) => {
   return `billiq_user_guest_${key}`;
 };
 
-const VALID_ROUTES = ["dashboard", "workspace", "invoice", "history", "customers", "suppliers", "profile", "privacy", "terms", "compliance", "admin", "landing", "features", "auth", "login", "signup"];
+const VALID_ROUTES = ["dashboard", "analytics", "workspace", "invoice", "history", "customers", "suppliers", "profile", "privacy", "terms", "compliance", "admin", "landing", "features", "auth", "login", "signup"];
 
 const getSavedRoute = (userId?: string | null): string | null => {
   try {
@@ -1017,7 +1046,12 @@ export default function App() {
   const [authInitialSignUp, setAuthInitialSignUp] = useState<boolean>(false);
 
   // Admin & Impersonation state
-  const [isAdminConsoleActive, setIsAdminConsoleActive] = useState<boolean>(true);
+  const [isAdminConsoleActive, setIsAdminConsoleActive] = useState<boolean>(() => {
+    const saved = getSavedRoute(null);
+    return saved === "admin";
+  });
+  const [isAdminPinVerified, setIsAdminPinVerified] = useState<boolean>(false);
+  const [showAdminPinModal, setShowAdminPinModal] = useState<boolean>(false);
   const [impersonatedUser, setImpersonatedUser] = useState<any | null>(null);
 
   const handleImpersonateUser = (userData: any) => {
@@ -1050,17 +1084,17 @@ export default function App() {
   };
 
   // State
-  const [step, setStep] = useState<"dashboard" | "invoice" | "customers" | "suppliers" | "profile" | "history" | "privacy" | "terms" | "compliance" | "cookie">(
+  const [step, setStep] = useState<"dashboard" | "analytics" | "invoice" | "customers" | "suppliers" | "profile" | "history" | "privacy" | "terms" | "compliance" | "cookie">(
     () => {
       const saved = getSavedRoute(null);
-      if (saved && ["dashboard", "invoice", "customers", "suppliers", "profile", "history", "privacy", "terms", "compliance"].includes(saved)) {
+      if (saved && ["dashboard", "analytics", "invoice", "customers", "suppliers", "profile", "history", "privacy", "terms", "compliance"].includes(saved)) {
         return saved as any;
       }
       return "dashboard";
     }
   );
 
-  const navigateToStep = useCallback((newStep: "dashboard" | "invoice" | "customers" | "suppliers" | "profile" | "history" | "privacy" | "terms" | "compliance") => {
+  const navigateToStep = useCallback((newStep: "dashboard" | "analytics" | "invoice" | "customers" | "suppliers" | "profile" | "history" | "privacy" | "terms" | "compliance") => {
     try {
       localStorage.setItem("billiq_has_entered_app", "true");
     } catch {}
@@ -1070,12 +1104,38 @@ export default function App() {
     setIsAdminConsoleActive(false);
     setStep(newStep);
   }, []);
-  const [business, setBusiness] = useState<BusinessDetails>({
-    name: "",
-    gstin: "",
-    address: "",
-    phone: "",
-    email: "",
+  const [business, setBusiness] = useState<BusinessDetails>(() => {
+    try {
+      const activeUid = typeof localStorage !== "undefined" ? (localStorage.getItem("activeUserId") || localStorage.getItem("billiq_active_user_id")) : null;
+      let local: string | null = null;
+      if (typeof localStorage !== "undefined") {
+        if (activeUid && activeUid !== "guest") {
+          local = localStorage.getItem(getStorageKey("business_details", activeUid));
+        }
+        if (!local) {
+          local = localStorage.getItem("billiq_user_guest_business_details") || localStorage.getItem("business_details");
+        }
+      }
+      if (local) {
+        const parsed = JSON.parse(local);
+        if (parsed && typeof parsed === "object") {
+          return {
+            ...parsed,
+            country: parsed.country || "India",
+            currency: parsed.currency || "INR",
+          };
+        }
+      }
+    } catch (e) {}
+    return {
+      name: "",
+      gstin: "",
+      address: "",
+      phone: "",
+      email: "",
+      country: "India",
+      currency: "INR",
+    };
   });
 
   const [customer, setCustomer] = useState<CustomerDetails>({
@@ -1089,6 +1149,10 @@ export default function App() {
   const [savedCustomers, setSavedCustomers] = useState<SavedCustomer[]>([]);
   const [savedSuppliers, setSavedSuppliers] = useState<SavedSupplier[]>([]);
   const [history, setHistory] = useState<DocumentHistoryItem[]>([]);
+  const historyRef = useRef<DocumentHistoryItem[]>([]);
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
   const [businessErrors, setBusinessErrors] = useState<Record<string, string | undefined>>({});
   const [logoError, setLogoError] = useState<string | null>(null);
   const [letterheadError, setLetterheadError] = useState<string | null>(null);
@@ -1136,17 +1200,14 @@ export default function App() {
   const [autoExportBadge, setAutoExportBadge] = useState(false);
   const [isTaxEnabled, setIsTaxEnabled] = useState(true);
   const [isIgst, setIsIgst] = useState(false);
-  const [currency, setCurrency] = useState("INR");
+  const [currency, setCurrency] = useState(() => business.currency || "INR");
 
-  // Keep active currency synced with business settings unless user is creating an export document
+  // Keep active currency synced with business profile settings when updated
   useEffect(() => {
-    if (!isExport) {
-      const bizCurrency = business.currency || (business.country ? getCountryConfig(business.country).currencyCode : "INR");
-      if (bizCurrency && currency !== bizCurrency) {
-        setCurrency(bizCurrency);
-      }
+    if (business.currency) {
+      setCurrency(business.currency);
     }
-  }, [business.currency, business.country, isExport]);
+  }, [business.currency]);
   const [exchangeRate, setExchangeRate] = useState(1);
   const [docId, setDocId] = useState("");
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
@@ -1161,7 +1222,13 @@ export default function App() {
   const [portOfLoading, setPortOfLoading] = useState("");
   const [portOfDischarge, setPortOfDischarge] = useState("");
   const [finalDestination, setFinalDestination] = useState("");
-  const [countryOfOrigin, setCountryOfOrigin] = useState("India");
+  const [countryOfOrigin, setCountryOfOrigin] = useState(() => business.country || "India");
+
+  useEffect(() => {
+    if (business.country) {
+      setCountryOfOrigin(business.country);
+    }
+  }, [business.country]);
   const [countryOfDestination, setCountryOfDestination] = useState("");
 
   const [hasSubmittedFeedback, setHasSubmittedFeedback] = useState<boolean>(() => {
@@ -1335,13 +1402,19 @@ export default function App() {
     authUsername?: string;
     displayName?: string;
     accountStatus?: string;
+    role?: string;
+    provider?: string;
     plan?: string;
     planTier?: string;
     planName?: string;
     docQuota?: number;
     maxDocs?: number;
     documentsRemaining?: number;
+    trialCreditsGranted?: number;
+    founderGrantNotice?: any;
     documentsUsed?: number;
+    lifetimeCreatedCount?: number;
+    totalGeneratedDocsCount?: number;
     trialUsed?: boolean;
     trialExhausted?: boolean;
     isReRegisteredUser?: boolean;
@@ -1501,7 +1574,8 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("AI command failed:", err);
-      setAiLineError(err.message || "An unexpected error occurred.");
+      const activeEmail = impersonatedUser?.email || user?.email;
+      setAiLineError(getDisplayErrorMessage(err, activeEmail, "An error occurred. Please try again or contact support."));
     } finally {
       setIsAiLineEditing(false);
     }
@@ -2283,8 +2357,8 @@ export default function App() {
           }
           
           showModal({
-            title: "Storage Quota Exceeded",
-            message: "Your browser storage is full. We've attempted to clear space, but we recommend checking your uploaded images or clearing your history.",
+            title: "Storage Space Notice",
+            message: "Your device storage is nearly full. We've organized your local cache safely, but recommend checking uploaded images or exporting your documents.",
             type: "warning"
           });
         }
@@ -2493,13 +2567,14 @@ export default function App() {
 
   // Synchronous active view persistence effect
   useEffect(() => {
-    if (user?.uid && step) {
+    if (user?.uid) {
       try {
-        localStorage.setItem(`billiq_user_${user.uid}_billiq_active_view`, step);
-        localStorage.setItem("billiq_active_view", step);
+        const routeToSave = (isAdminConsoleActive && !impersonatedUser && isAdminUser(user, userProfile)) ? "admin" : (step || "dashboard");
+        localStorage.setItem(`billiq_user_${user.uid}_billiq_active_view`, routeToSave);
+        localStorage.setItem("billiq_active_view", routeToSave);
       } catch (e) {}
     }
-  }, [user?.uid, step]);
+  }, [user?.uid, step, isAdminConsoleActive, impersonatedUser, userProfile]);
 
   // Auth listener with Synchronous Auth Lock Guard
   useEffect(() => {
@@ -2614,6 +2689,11 @@ export default function App() {
       } else if (savedRoute === "features") {
         setShowLanding(false);
         setShowFeatures(true);
+      } else if (savedRoute === "analytics") {
+        setShowLanding(false);
+        setShowFeatures(false);
+        setIsAdminConsoleActive(false);
+        setStep("analytics");
       } else if (savedRoute === "workspace" || savedRoute === "invoice") {
         setShowLanding(false);
         setShowFeatures(false);
@@ -2663,7 +2743,7 @@ export default function App() {
         // Default route for logged in users (or if savedRoute was "landing" or empty)
         setShowLanding(false);
         setShowFeatures(false);
-        if (isAdmin) {
+        if (isAdmin && savedRoute === "admin") {
           setIsAdminConsoleActive(true);
         } else {
           setIsAdminConsoleActive(false);
@@ -2784,7 +2864,7 @@ export default function App() {
         try {
           const parsed = JSON.parse(historyData);
           setHistory(parsed);
-          seedReferenceHistoryFromDocumentHistory(parsed);
+          seedReferenceHistoryFromDocumentHistory(parsed, userId);
         } catch (e) {
           console.error("Failed to parse history data", e);
         }
@@ -2842,18 +2922,30 @@ export default function App() {
             // Overwrite with cloud data if it exists, preserving local assets if cloud has stripped them
             if (cloudData.business) {
               setBusiness(prev => {
-                const bizName = cloudData.business.name || cloudData.business.companyName || prev.name || "";
+                const bizCountry = prev.country || cloudData.business.country || countryOfOrigin || "India";
+                const bizCurrency = prev.currency || cloudData.business.currency || "INR";
+                const bizName = prev.name || cloudData.business.name || cloudData.business.companyName || "";
                 const merged = {
-                  ...prev,
                   ...cloudData.business,
+                  ...prev,
                   name: bizName,
                   companyName: bizName,
+                  country: bizCountry,
+                  currency: bizCurrency,
+                  state: prev.state !== undefined && prev.state !== "" ? prev.state : (cloudData.business.state || ""),
                   letterhead: prev.letterhead || cloudData.business.letterhead,
                   logo: prev.logo || cloudData.business.logo,
                   signature: prev.signature || cloudData.business.signature,
                 };
                 safeSave("business_details", merged, user.uid);
-                if (merged.currency) setCurrency(merged.currency);
+                try {
+                  localStorage.setItem("business_details", JSON.stringify(merged));
+                  localStorage.setItem(getStorageKey("business_details", user.uid), JSON.stringify(merged));
+                } catch {}
+                if (merged.currency) {
+                  setCurrency(merged.currency);
+                }
+                if (merged.country) setCountryOfOrigin(merged.country);
                 return merged;
               });
             }
@@ -3113,6 +3205,15 @@ export default function App() {
         const docQuotaVal = cloudData.docQuota !== undefined ? cloudData.docQuota : cloudData.documentsRemaining;
         const maxDocsVal = cloudData.maxDocs !== undefined ? cloudData.maxDocs : docQuotaVal;
 
+        const targetUid = impersonatedUser ? impersonatedUser.id : user?.uid;
+        const currentHistoryLen = Array.isArray(cloudData.history) ? cloudData.history.length : (Array.isArray(history) ? history.length : 0);
+        const syncedLifetime = getEffectiveLifetimeDocCount(cloudData, targetUid, currentHistoryLen);
+        const bonusGranted = cloudData.trialCreditsGranted || 0;
+        const syncedRemaining = cloudData.documentsRemaining !== undefined 
+          ? cloudData.documentsRemaining 
+          : Math.max(0, 5 + bonusGranted - syncedLifetime);
+        const isTrialExhausted = syncedRemaining <= 0 && syncedPlanTier !== "pro" && syncedPlanTier !== "enterprise";
+
         // Sync core user profile & permanent signup credentials
         setUserProfile({
           signupEmail: cloudData.signupEmail || cloudData.authEmail || cloudData.email || activeEmail,
@@ -3121,7 +3222,6 @@ export default function App() {
           authUsername: cloudData.authUsername || cloudData.username || cloudData.displayName || activeNameFallback,
           displayName: cloudData.displayName || (impersonatedUser ? impersonatedUser.displayName : user?.displayName) || "",
           accountStatus: cloudData.accountStatus || "Active",
-          status: cloudData.status || cloudData.accountStatus || "active",
           role: cloudData.role || (syncedPlanTier === "enterprise" ? "admin" : "staff"),
           provider: cloudData.provider || cloudData.authProvider || "email",
           plan: syncedPlanName,
@@ -3129,11 +3229,15 @@ export default function App() {
           planName: syncedPlanName,
           docQuota: docQuotaVal,
           maxDocs: maxDocsVal,
-          documentsRemaining: cloudData.documentsRemaining !== undefined ? cloudData.documentsRemaining : 5,
-          documentsUsed: cloudData.documentsUsed || 0,
+          documentsRemaining: syncedRemaining,
+          trialCreditsGranted: bonusGranted,
+          founderGrantNotice: cloudData.founderGrantNotice,
+          documentsUsed: syncedLifetime,
+          lifetimeCreatedCount: syncedLifetime,
+          totalGeneratedDocsCount: syncedLifetime,
           trialUsed: cloudData.trialUsed !== undefined ? cloudData.trialUsed : true,
-          trialExhausted: cloudData.trialExhausted !== undefined ? cloudData.trialExhausted : (cloudData.documentsRemaining !== undefined && cloudData.documentsRemaining <= 0 && syncedPlanTier !== "pro" && syncedPlanTier !== "enterprise"),
-          isReRegisteredUser: cloudData.isReRegisteredUser || false,
+          trialExhausted: isTrialExhausted,
+          isReRegisteredUser: isTrialExhausted && (cloudData.isReRegisteredUser || false),
           hasSeenWelcome: cloudData.hasSeenWelcome || false,
           overrides: cloudData.overrides,
           overrideAuditLogs: cloudData.overrideAuditLogs || cloudData.overrideLogs,
@@ -3146,54 +3250,78 @@ export default function App() {
         // Compute merged business details
         let mergedBusiness = business;
         if (cloudData.business) {
-          const bizName = cloudData.business.name || cloudData.business.companyName || business.name || "";
-          mergedBusiness = {
-            ...business,
-            ...cloudData.business,
-            name: bizName,
-            companyName: bizName,
-            letterhead: business.letterhead || cloudData.business.letterhead,
-            logo: business.logo || cloudData.business.logo,
-            signature: business.signature || cloudData.business.signature,
-          };
-          setBusiness(mergedBusiness);
-          safeSave("business_details", mergedBusiness, targetUid);
-          if (mergedBusiness.currency) setCurrency(mergedBusiness.currency);
+          setBusiness(prev => {
+            const bizCountry = prev.country || cloudData.business.country || countryOfOrigin || "India";
+            const bizCurrency = prev.currency || cloudData.business.currency || "INR";
+            const bizName = prev.name || cloudData.business.name || cloudData.business.companyName || "";
+            mergedBusiness = {
+              ...cloudData.business,
+              ...prev,
+              name: bizName,
+              companyName: bizName,
+              country: bizCountry,
+              currency: bizCurrency,
+              state: prev.state !== undefined && prev.state !== "" ? prev.state : (cloudData.business.state || ""),
+              letterhead: prev.letterhead || cloudData.business.letterhead,
+              logo: prev.logo || cloudData.business.logo,
+              signature: prev.signature || cloudData.business.signature,
+            };
+            safeSave("business_details", mergedBusiness, targetUid);
+            try {
+              localStorage.setItem("business_details", JSON.stringify(mergedBusiness));
+              if (targetUid) {
+                localStorage.setItem(getStorageKey("business_details", targetUid), JSON.stringify(mergedBusiness));
+              }
+            } catch {}
+            if (mergedBusiness.currency) {
+              setCurrency(mergedBusiness.currency);
+            }
+            if (mergedBusiness.country) setCountryOfOrigin(mergedBusiness.country);
+            return mergedBusiness;
+          });
         }
 
         // Compute merged history documents
-        let mergedHistory = history;
+        let mergedHistory = historyRef.current && historyRef.current.length > 0 ? historyRef.current : history;
         if (Array.isArray(cloudData.history)) {
-          const map = new Map<string, DocumentHistoryItem>();
-          
-          // Add cloud history items
-          cloudData.history.forEach((item: DocumentHistoryItem) => {
-            if (item && item.id) {
-              map.set(`${item.id}_${item.type || ''}`, item);
-            }
-          });
+          setHistory((prevHistory) => {
+            const map = new Map<string, DocumentHistoryItem>();
+            
+            // Add cloud history items
+            cloudData.history.forEach((item: DocumentHistoryItem) => {
+              if (item && item.id) {
+                map.set(`${item.id}_${item.type || ''}`, item);
+              }
+            });
 
-          // Preserve local history items if missing in cloud or if local has fullData
-          (history || []).forEach((localItem) => {
-            if (localItem && localItem.id) {
-              const key = `${localItem.id}_${localItem.type || ''}`;
-              const cloudItem = map.get(key);
-              if (!cloudItem) {
-                map.set(key, localItem);
-              } else {
-                if (localItem.fullData && !cloudItem.fullData) {
-                  map.set(key, { ...cloudItem, fullData: localItem.fullData });
-                } else if ((localItem.timestamp || 0) > (cloudItem.timestamp || 0)) {
+            // Preserve local history items from current state, ref, and localStorage if missing in cloud or if local has newer/fullData
+            const localSources = [...(prevHistory || []), ...(historyRef.current || []), ...getLocalCachedDocuments(targetUid)];
+            localSources.forEach((localItem) => {
+              if (localItem && localItem.id) {
+                const key = `${localItem.id}_${localItem.type || ''}`;
+                const cloudItem = map.get(key);
+                if (!cloudItem) {
                   map.set(key, localItem);
+                } else {
+                  if (localItem.fullData && !cloudItem.fullData) {
+                    map.set(key, { ...cloudItem, fullData: localItem.fullData });
+                  } else if ((localItem.timestamp || 0) > (cloudItem.timestamp || 0)) {
+                    map.set(key, localItem);
+                  }
                 }
               }
-            }
-          });
+            });
 
-          mergedHistory = Array.from(map.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-          setHistory(mergedHistory);
-          seedReferenceHistoryFromDocumentHistory(mergedHistory);
-          safeSave("document_history", mergedHistory, targetUid);
+            mergedHistory = Array.from(map.values()).sort((a, b) => {
+              const tA = typeof a.timestamp === "number" ? a.timestamp : (a.timestamp ? new Date(a.timestamp).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0));
+              const tB = typeof b.timestamp === "number" ? b.timestamp : (b.timestamp ? new Date(b.timestamp).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0));
+              return tB - tA;
+            });
+            historyRef.current = mergedHistory;
+            seedReferenceHistoryFromDocumentHistory(mergedHistory);
+            safeSave("document_history", mergedHistory, targetUid);
+            return mergedHistory;
+          });
         }
 
         // Sync Saved Customers
@@ -3247,14 +3375,14 @@ export default function App() {
         // Real-time unblock check: if upgraded to Enterprise / Pro, credits added, or bypassDocLimit active, immediately dismiss limit modal
         const planDetails = getPlanDetails(syncedPlanTier || syncedPlanName);
         const hasBypass = cloudData.overrides?.bypassDocLimit === true;
-        const isUnlimitedOrHasQuota = hasBypass || planDetails.isUnlimited || syncedPlanTier === "enterprise" || syncedPlanTier === "pro" || (cloudData.documentsRemaining !== undefined && cloudData.documentsRemaining > 0);
+        const isUnlimitedOrHasQuota = hasBypass || planDetails.isUnlimited || syncedPlanTier === "enterprise" || syncedPlanTier === "pro" || syncedRemaining > 0;
 
         if (isUnlimitedOrHasQuota) {
           setShowTrialLimitModal(false);
           setTrialModalCustomMessage(undefined);
         } else if (
-          cloudData.trialExhausted === true ||
-          (cloudData.isReRegisteredUser && ((cloudData.documentsRemaining !== undefined && cloudData.documentsRemaining <= 0) || cloudData.planTier === "expired"))
+          isTrialExhausted ||
+          (cloudData.isReRegisteredUser && syncedRemaining <= 0)
         ) {
           setShowWelcomeModal(false);
           setShowTrialLimitModal(true);
@@ -3293,6 +3421,50 @@ export default function App() {
     return () => unsubscribe();
   }, [user, impersonatedUser, isConfigValid, computeDataHash]);
 
+  // Real-time listener for user documents in Firestore subcollection users/{userId}/documents
+  useEffect(() => {
+    const targetUid = impersonatedUser ? impersonatedUser.id : user?.uid;
+    if (!targetUid || !isConfigValid) return;
+
+    const unsubscribeDocs = subscribeToUserDocuments(targetUid, (cloudDocs) => {
+      if (Array.isArray(cloudDocs) && cloudDocs.length > 0) {
+        setHistory((prev) => {
+          const docMap = new Map<string, DocumentHistoryItem>();
+          // Add cloud documents
+          cloudDocs.forEach(d => {
+            if (d && d.id) docMap.set(`${d.id}_${d.type || ''}`, d);
+          });
+          // Preserve local documents not yet in cloud or preserving newer / fullData
+          const localSources = [...(prev || []), ...(historyRef.current || []), ...getLocalCachedDocuments(targetUid)];
+          localSources.forEach(d => {
+            if (d && d.id) {
+              const key = `${d.id}_${d.type || ''}`;
+              const existing = docMap.get(key);
+              if (!existing) {
+                docMap.set(key, d);
+              } else if (d.fullData && !existing.fullData) {
+                docMap.set(key, { ...existing, fullData: d.fullData });
+              } else if ((d.timestamp || 0) > (existing.timestamp || 0)) {
+                docMap.set(key, d);
+              }
+            }
+          });
+          const merged = Array.from(docMap.values()).sort((a, b) => {
+            const tA = typeof a.timestamp === "number" ? a.timestamp : (a.timestamp ? new Date(a.timestamp).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0));
+            const tB = typeof b.timestamp === "number" ? b.timestamp : (b.timestamp ? new Date(b.timestamp).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0));
+            return tB - tA;
+          });
+          historyRef.current = merged;
+          safeSave("document_history", merged, targetUid);
+          seedReferenceHistoryFromDocumentHistory(merged);
+          return merged;
+        });
+      }
+    });
+
+    return () => unsubscribeDocs();
+  }, [user, impersonatedUser, isConfigValid]);
+
   const handleAdminUpdatedUser = useCallback((updatedUserData: any) => {
     if (!updatedUserData) return;
 
@@ -3319,11 +3491,14 @@ export default function App() {
         docQuota: docQuotaVal,
         maxDocs: maxDocsVal,
         documentsRemaining: updatedUserData.documentsRemaining !== undefined ? updatedUserData.documentsRemaining : (planInfo.isUnlimited ? 999999 : prev?.documentsRemaining),
+        trialCreditsGranted: updatedUserData.trialCreditsGranted !== undefined ? updatedUserData.trialCreditsGranted : prev?.trialCreditsGranted,
+        founderGrantNotice: updatedUserData.founderGrantNotice || prev?.founderGrantNotice,
+        trialExhausted: updatedUserData.documentsRemaining !== undefined ? (updatedUserData.documentsRemaining <= 0) : prev?.trialExhausted,
         accountStatus: updatedUserData.accountStatus || prev?.accountStatus || "Active",
         updatedAt: updatedUserData.updatedAt || new Date().toISOString(),
       }));
 
-      if (planInfo.isUnlimited || planInfo.tier === "enterprise" || planInfo.tier === "pro") {
+      if (planInfo.isUnlimited || planInfo.tier === "enterprise" || planInfo.tier === "pro" || (updatedUserData.documentsRemaining !== undefined && updatedUserData.documentsRemaining > 0)) {
         setShowTrialLimitModal(false);
         setTrialModalCustomMessage(undefined);
       }
@@ -3332,22 +3507,18 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      try {
-        localStorage.removeItem('billiq_is_logged_in');
-        localStorage.removeItem('billiq_has_entered_app');
-        localStorage.removeItem('billiq_active_view');
-        localStorage.removeItem('active_app_route');
-        localStorage.removeItem('active_app_step');
-      } catch {}
+      purgeUnpartitionedCache(null);
       await logoutUser();
       loadedUserIdRef.current = Symbol("logged_out");
       resetAllState();
       setUser(null);
+      setUserProfile(null);
+      setImpersonatedUser(null);
       setShowAuthScreen(false);
       setShowLanding(true);
       setStep("dashboard");
     } catch (error) {
-      console.error("Logout error:", error);
+      console.warn("Logout notice:", error);
     }
   };
 
@@ -3363,7 +3534,7 @@ export default function App() {
     return id;
   }, [user, impersonatedUser]);
 
-  const syncToCloudData = async () => {
+  const syncToCloudData = async (overrideHistory?: DocumentHistoryItem[]) => {
     if (!syncId || isSyncInProgressRef.current || isIncomingCloudSyncRef.current) return;
     if (Date.now() < syncCooldownUntilRef.current) return;
 
@@ -3373,7 +3544,7 @@ export default function App() {
       sanitizedLastUsed[sanitizeKey(key)] = val;
     });
 
-    let syncHistory = [...history];
+    let syncHistory = overrideHistory ? [...overrideHistory] : (historyRef.current && historyRef.current.length > 0 ? [...historyRef.current] : [...history]);
     if (syncHistory.length === 0 && syncId) {
       const cachedHist = localStorage.getItem(getStorageKey("document_history", syncId));
       if (cachedHist) {
@@ -3437,6 +3608,14 @@ export default function App() {
       }
       if (activeDisplayName) {
         data.displayName = activeDisplayName;
+      }
+
+      const currentLifetime = getEffectiveLifetimeDocCount(userProfile, syncId, (history || []).length);
+      data.lifetimeCreatedCount = currentLifetime;
+      data.totalGeneratedDocsCount = currentLifetime;
+      data.documentsUsed = currentLifetime;
+      if (userProfile?.documentsRemaining !== undefined) {
+        data.documentsRemaining = userProfile.documentsRemaining;
       }
 
       // Target size in characters (approx bytes). Limit is 1,048,576. We target safe ~850,000.
@@ -3582,11 +3761,16 @@ export default function App() {
           console.error("Restore Error:", error);
           setSyncStatus("error");
           const isQuota = checkIsQuotaExceededError(error);
+          const activeEmail = impersonatedUser?.email || user?.email;
+          const isDev = isDeveloperAccount(activeEmail);
+          
           showModal({
-            title: isQuota ? "Database Quota Exceeded" : "Error",
+            title: isQuota ? (isDev ? "Database Quota Exceeded" : "Connection Notice") : "Sync Notice",
             message: isQuota
-              ? "The cloud database's free daily write/read units quota has been exceeded. The application will continue to run in Offline Mode using your browser's local storage safely."
-              : "Failed to restore data. Check your Firebase configuration.",
+              ? (isDev
+                  ? "The cloud database's free daily write/read units quota has been exceeded. The application will continue to run in Offline Mode using your browser's local storage safely."
+                  : "Unable to sync with cloud. Your document has been saved safely to your device.")
+              : getDisplayErrorMessage(error, activeEmail, "Connection issue. Changes saved locally and will sync once reconnected."),
             type: "warning"
           });
         }
@@ -3849,11 +4033,42 @@ export default function App() {
     setIsSavingSettings(true);
 
     try {
-      // Explicitly save business details and PDF customizer settings on user trigger
-      safeSave("business_details", business, user?.uid);
-      safeSave("pdf_layout_settings", layoutSettings, user?.uid);
+      isIncomingCloudSyncRef.current = false;
+      syncCooldownUntilRef.current = 0;
 
-      if (user?.uid) {
+      const effectiveCurrency = business.currency || currency || "INR";
+      const effectiveCountry = business.country || countryOfOrigin || "India";
+      const finalBiz: BusinessDetails = {
+        ...business,
+        currency: effectiveCurrency,
+        country: effectiveCountry,
+      };
+      setBusiness(finalBiz);
+      setCurrency(effectiveCurrency);
+      setCountryOfOrigin(effectiveCountry);
+
+      const targetUid = impersonatedUser ? impersonatedUser.id : user?.uid;
+
+      // Explicitly save business details and PDF customizer settings on user trigger
+      safeSave("business_details", finalBiz, targetUid);
+      safeSave("pdf_layout_settings", layoutSettings, targetUid);
+      try {
+        localStorage.setItem("business_details", JSON.stringify(finalBiz));
+        if (targetUid) {
+          localStorage.setItem(getStorageKey("business_details", targetUid), JSON.stringify(finalBiz));
+        }
+      } catch {}
+
+      if (targetUid && isConfigValid && db) {
+        try {
+          await saveToCloud(`users/${targetUid}`, {
+            business: finalBiz,
+            pdf_layout_settings: layoutSettings,
+            updatedAt: new Date().toISOString()
+          }, true);
+        } catch (cloudErr) {
+          console.warn("Notice saving business to cloud:", cloudErr);
+        }
         await syncToCloudData();
       }
 
@@ -3947,16 +4162,37 @@ export default function App() {
 
   // Calculations
   const handleBusinessChange = async (updates: Partial<BusinessDetails>) => {
-    setBusiness(prev => {
-      const updated = { ...prev, ...updates };
-      safeSave("business_details", updated, user?.uid);
-      return updated;
-    });
+    isIncomingCloudSyncRef.current = false;
+    syncCooldownUntilRef.current = 0;
+
+    const targetUid = impersonatedUser ? impersonatedUser.id : user?.uid;
 
     if (updates.country) {
       setCountryOfOrigin(updates.country);
       saveReferenceValue("countryOfOrigin", updates.country);
+      if (!updates.currency) {
+        const countryCfg = getCountryConfig(updates.country);
+        if (countryCfg && countryCfg.currencyCode) {
+          updates.currency = countryCfg.currencyCode;
+        }
+      }
     }
+
+    if (updates.currency) {
+      setCurrency(updates.currency);
+    }
+
+    setBusiness(prev => {
+      const updated = { ...prev, ...updates };
+      safeSave("business_details", updated, targetUid);
+      try {
+        localStorage.setItem("business_details", JSON.stringify(updated));
+        if (targetUid) {
+          localStorage.setItem(getStorageKey("business_details", targetUid), JSON.stringify(updated));
+        }
+      } catch {}
+      return updated;
+    });
     
     if (updates.letterhead) {
       try {
@@ -4122,6 +4358,17 @@ export default function App() {
 
   const removeItem = useCallback((id: string) => {
     setItems(prev => prev.filter(item => item.id !== id));
+  }, []);
+
+  const reorderItems = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+    setItems(prevItems => {
+      if (fromIndex >= prevItems.length || toIndex >= prevItems.length) return prevItems;
+      const updated = [...prevItems];
+      const [moved] = updated.splice(fromIndex, 1);
+      updated.splice(toIndex, 0, moved);
+      return updated;
+    });
   }, []);
 
   const handleAIAnalysis = useCallback((analysis: AIDocumentAnalysis, mergeSimilar: boolean = false) => {
@@ -4392,10 +4639,9 @@ export default function App() {
       despatchDocNo,
       packingBoxes: (() => {
         const isPackingList = docType === DocumentType.PACKING_LIST;
-        const boxesMap: Record<string, { gross: number; net: number; qty: number }> = {};
-        
         if (!isPackingList) {
           // Restore legacy fallback behavior entirely for other documents to avoid side-effects
+          const boxesMap: Record<string, { gross: number; net: number; qty: number }> = {};
           if (!boxesMap["Box 1"]) {
             boxesMap["Box 1"] = { gross: 0, net: 0, qty: 0 };
           }
@@ -4409,51 +4655,43 @@ export default function App() {
             boxesMap[bNo].net += (item.netWeight || 0);
             boxesMap[bNo].gross += (item.grossWeight || 0);
           });
-        } else {
-          // Clean Packing List logic with custom manual boxes and no auto Box 1 fallback
-          customBoxes.forEach(b => {
-            if (b && b.trim()) {
-              boxesMap[b.trim()] = { gross: 0, net: 0, qty: 0 };
-            }
-          });
+          return Object.entries(boxesMap).map(([boxNo, metrics]) => {
+            const netOverride = boxNetWeights[boxNo];
+            const grossOverride = boxGrossWeights[boxNo];
+            const qtyOverride = boxQtyPacked[boxNo];
 
-          items.forEach(item => {
-            const bNo = (item.boxNo || "").trim();
-            if (!bNo) return;
-            if (!boxesMap[bNo]) {
-              boxesMap[bNo] = { gross: 0, net: 0, qty: 0 };
-            }
-            const q = item.qtyPacked || item.quantity || 0;
-            boxesMap[bNo].qty += q;
-            boxesMap[bNo].net += (item.netWeight || 0);
-            boxesMap[bNo].gross += (item.grossWeight || 0);
+            const finalNet = (netOverride !== undefined && netOverride !== "") 
+              ? parseFloat(netOverride) 
+              : Math.round(metrics.net * 100) / 100;
+            
+            const finalGross = (grossOverride !== undefined && grossOverride !== "") 
+              ? parseFloat(grossOverride) 
+              : Math.round(metrics.gross * 100) / 100;
+
+            const finalQty = (qtyOverride !== undefined && qtyOverride !== "") 
+              ? parseInt(qtyOverride) 
+              : metrics.qty;
+
+            return {
+              boxNo,
+              quantityText: `${boxNo} X ${finalQty}`,
+              grossWeight: isNaN(finalGross) ? 0 : Math.round(finalGross * 100) / 100,
+              netWeight: isNaN(finalNet) ? 0 : Math.round(finalNet * 100) / 100,
+              dimensions: boxDimensions[boxNo] || "",
+            };
           });
         }
-        return Object.entries(boxesMap).map(([boxNo, metrics]) => {
-          const netOverride = boxNetWeights[boxNo];
-          const grossOverride = boxGrossWeights[boxNo];
-          const qtyOverride = boxQtyPacked[boxNo];
 
-          const finalNet = (netOverride !== undefined && netOverride !== "") 
-            ? parseFloat(netOverride) 
-            : Math.round(metrics.net * 100) / 100;
-          
-          const finalGross = (grossOverride !== undefined && grossOverride !== "") 
-            ? parseFloat(grossOverride) 
-            : Math.round(metrics.gross * 100) / 100;
-
-          const finalQty = (qtyOverride !== undefined && qtyOverride !== "") 
-            ? parseInt(qtyOverride) 
-            : metrics.qty;
-
-          return {
-            boxNo,
-            quantityText: `${boxNo} X ${finalQty}`,
-            grossWeight: isNaN(finalGross) ? 0 : Math.round(finalGross * 100) / 100,
-            netWeight: isNaN(finalNet) ? 0 : Math.round(finalNet * 100) / 100,
-            dimensions: boxDimensions[boxNo] || "",
-          };
-        });
+        // Dedicated intelligent aggregation for Packing List
+        const aggregated = aggregateLineItemsForBoxes(
+          items,
+          customBoxes,
+          boxDimensions,
+          boxNetWeights,
+          boxGrossWeights,
+          boxQtyPacked
+        );
+        return convertAggregatedBoxesToPackingBoxes(aggregated);
       })(),
     };
   };
@@ -4553,16 +4791,31 @@ export default function App() {
     setIsTaxSummaryModalOpen(true);
   };
 
-  const checkSaveQuotaAndEdits = (checkDocId: string): { allowed: boolean; willCreateNewDocEntry: boolean; nextEditCount: number; existingDoc?: DocumentHistoryItem } | null => {
+  const checkSaveQuotaAndEdits = (checkDocId: string): { 
+    allowed: boolean; 
+    isEditingExisting: boolean;
+    consumesQuota: boolean;
+    nextEditCount: number; 
+    existingDoc?: DocumentHistoryItem 
+  } | null => {
     const rawTier = userProfile?.planTier || userProfile?.planName || userProfile?.plan;
     const planInfo = getPlanDetails(rawTier);
     const isPro = planInfo.tier === "pro" || planInfo.tier === "enterprise" || planInfo.isUnlimited || (typeof rawTier === "string" && (rawTier.toLowerCase().includes("pro") || rawTier.toLowerCase().includes("enterprise")));
-    const maxQuota = isPro ? Infinity : (userProfile?.documentsRemaining !== undefined ? Math.max(planInfo.documentLimit || 5, userProfile.documentsRemaining) : (planInfo.documentLimit || 5));
-    const docCount = (history || []).length;
+    const bonusCredits = userProfile?.trialCreditsGranted || 0;
+    const maxQuota = isPro ? Infinity : ((planInfo.documentLimit || 5) + bonusCredits);
+    const activeUid = impersonatedUser ? impersonatedUser.id : user?.uid;
+    const usedCount = getEffectiveLifetimeDocCount(userProfile, activeUid, (history || []).length);
+    const remaining = userProfile?.documentsRemaining !== undefined ? userProfile.documentsRemaining : Math.max(0, maxQuota - usedCount);
 
-    const existingDoc = loadedTimestamp
-      ? (history || []).find(item => item.timestamp === loadedTimestamp)
-      : (history || []).find(item => item.id === checkDocId && item.type === docType);
+    // Check if the loaded document matches the current document being saved
+    const loadedDoc = loadedTimestamp ? (history || []).find(item => item.timestamp === loadedTimestamp) : undefined;
+    
+    // If the document type was changed (e.g. Tax Invoice -> Quotation), or if doc ID changed from loadedDoc, it is NOT the same existing document!
+    const isSameAsLoaded = loadedDoc && loadedDoc.type === docType && (loadedDoc.id === checkDocId || loadedDoc.documentNumber === checkDocId || (docType === DocumentType.QUOTATION && checkDocId.startsWith(loadedDoc.id)));
+    
+    const existingDoc = isSameAsLoaded
+      ? loadedDoc
+      : (history || []).find(item => (item.id === checkDocId || item.documentNumber === checkDocId) && item.type === docType);
 
     const isEditingExisting = !!existingDoc;
     const currentEdits = existingDoc?.editCount || 0;
@@ -4571,76 +4824,190 @@ export default function App() {
       // Enterprise or Pro: immediately unblock document creation and editing
       return {
         allowed: true,
-        willCreateNewDocEntry: !isEditingExisting,
+        isEditingExisting,
+        consumesQuota: false,
         nextEditCount: isEditingExisting ? currentEdits + 1 : 0,
         existingDoc
       };
     }
 
     if (!isEditingExisting) {
-      if (docCount >= maxQuota) {
-        setTrialModalCustomMessage(`Maximum ${maxQuota} Documents Allowed for ${planInfo.badgeText}. Upgrade to Pro to create more documents.`);
+      // Brand new document generation
+      if (remaining <= 0) {
+        setTrialModalCustomMessage(`Maximum Free Documents Reached (${usedCount} Documents Created). Upgrade to Pro to create more documents.`);
         setShowTrialLimitModal(true);
-        showShortcutToast(`⚠️ ${planInfo.badgeText} Limit Reached (${docCount}/${maxQuota} Documents Created).`);
+        showShortcutToast(`⚠️ Free Limit Reached (${usedCount} Documents Created).`);
         return null;
       }
-      if (docCount >= 1 && !hasSubmittedFeedback) {
+      if (usedCount >= 1 && !hasSubmittedFeedback && bonusCredits === 0) {
         setShowFeedbackModal(true);
         showShortcutToast("📝 Please complete the mandatory survey to unlock creation of Document #2!");
         return null;
       }
-      return { allowed: true, willCreateNewDocEntry: true, nextEditCount: 0, existingDoc: undefined };
+      return { 
+        allowed: true, 
+        isEditingExisting: false, 
+        consumesQuota: true, 
+        nextEditCount: 0, 
+        existingDoc: undefined 
+      };
     } else {
       if (currentEdits === 0) {
-        // 1st edit is free! Does not consume extra quota slot
-        return { allowed: true, willCreateNewDocEntry: false, nextEditCount: 1, existingDoc };
+        // 1st edit is free (editCount 0 -> 1): updates existing doc in place without consuming quota credit
+        return { 
+          allowed: true, 
+          isEditingExisting: true, 
+          consumesQuota: false, 
+          nextEditCount: 1, 
+          existingDoc 
+        };
       } else {
-        // 2nd edit or more: consumes a new document credit (counts as a newly generated document against 5-doc limit)
-        if (docCount >= maxQuota) {
-          setTrialModalCustomMessage(`Your free quota is full (${docCount}/${maxQuota} documents used) and you have already used your 1 free edit for this document. Upgrade to Pro to save further edits or create new documents.`);
+        // 2nd edit and beyond (editCount >= 1): counts as a new document generation and consumes a quota credit
+        if (remaining <= 0) {
+          setTrialModalCustomMessage(`Your free document quota is full (0 documents remaining) and you have already used your 1 free edit for this document. Upgrade to Pro to save further edits or create new documents.`);
           setShowTrialLimitModal(true);
-          showShortcutToast(`⚠️ Free quota full (${docCount}/${maxQuota} docs used). Free edit already consumed.`);
+          showShortcutToast(`⚠️ Free quota full. Free edit already consumed.`);
           return null;
         }
-        return { allowed: true, willCreateNewDocEntry: true, nextEditCount: 0, existingDoc };
+        return { 
+          allowed: true, 
+          isEditingExisting: true, 
+          consumesQuota: true, 
+          nextEditCount: currentEdits + 1, 
+          existingDoc 
+        };
       }
     }
   };
 
-  const saveDocumentToHistory = async () => {
+  const saveDocumentToHistory = async (options?: { silent?: boolean; showToast?: boolean }): Promise<{ success: boolean; data?: InvoiceData; item?: DocumentHistoryItem }> => {
     if (!business.name || !customer.name) {
       showModal({
         title: "Missing Details",
         message: "Please fill in business and customer details.",
         type: "warning"
       });
-      return;
+      return { success: false };
     }
 
     let finalDocId = docId;
     if (loadedTimestamp && docType === DocumentType.QUOTATION && !finalDocId.includes("(R)")) {
-      finalDocId = `${finalDocId} (R)`;
-      setDocId(finalDocId);
+      const loadedDoc = (history || []).find(item => item.timestamp === loadedTimestamp);
+      if (loadedDoc && loadedDoc.type === DocumentType.QUOTATION) {
+        finalDocId = `${finalDocId} (R)`;
+        setDocId(finalDocId);
+      }
     }
 
     const quotaCheck = checkSaveQuotaAndEdits(finalDocId);
-    if (!quotaCheck) return;
+    if (!quotaCheck) return { success: false };
 
-    const { willCreateNewDocEntry, nextEditCount, existingDoc } = quotaCheck;
+    const { isEditingExisting, consumesQuota, nextEditCount, existingDoc } = quotaCheck;
     const isFirstDoc = (history || []).length === 0;
 
+    // Save customer / supplier contact
+    const customerPreferences = { isExport, currency, notes, terms };
+    if (docType === DocumentType.PURCHASE_ORDER) {
+      await autoSaveContactIfNew(
+        {
+          name: customer.name,
+          type: 'Supplier',
+          gstin: customer.gstin,
+          email: customer.email,
+          phone: customer.phone,
+          address: customer.address,
+          country: customer.country,
+          attentionPerson: customer.attentionPerson,
+        },
+        savedSuppliers as unknown as ContactEntity[],
+        async (newContact) => {
+          const exists = savedSuppliers.find(c => (c.name || "").toLowerCase() === (customer.name || "").toLowerCase());
+          let updatedSuppliers;
+          if (!exists) {
+            updatedSuppliers = [...savedSuppliers, { ...customer, ...customerPreferences, id: newContact.id || Math.random().toString(36).substr(2, 9) }];
+          } else {
+            updatedSuppliers = savedSuppliers.map(c => c.id === exists.id ? { ...customer, ...customerPreferences, id: c.id } : c);
+          }
+          setSavedSuppliers(updatedSuppliers);
+          safeSave("saved_suppliers", updatedSuppliers, user?.uid);
+          if (user?.uid) {
+            saveUserContact(user.uid, {
+              name: customer.name,
+              type: 'Supplier',
+              gstin: customer.gstin,
+              email: customer.email,
+              phone: customer.phone,
+              address: customer.address,
+              country: customer.country,
+              attentionPerson: customer.attentionPerson,
+            }).catch(e => console.warn("Cloud contact save fallback", e));
+          }
+        }
+      );
+    } else {
+      await autoSaveContactIfNew(
+        {
+          name: customer.name,
+          type: 'Customer',
+          gstin: customer.gstin,
+          email: customer.email,
+          phone: customer.phone,
+          address: customer.address,
+          country: customer.country,
+        },
+        savedCustomers as unknown as ContactEntity[],
+        async (newContact) => {
+          const exists = savedCustomers.find(c => (c.name || "").toLowerCase() === (customer.name || "").toLowerCase());
+          let updatedCustomers;
+          if (!exists) {
+            updatedCustomers = [...savedCustomers, { ...customer, ...customerPreferences, id: newContact.id || Math.random().toString(36).substr(2, 9) }];
+          } else {
+            updatedCustomers = savedCustomers.map(c => c.id === exists.id ? { ...customer, ...customerPreferences, id: c.id } : c);
+          }
+          setSavedCustomers(updatedCustomers);
+          safeSave("saved_customers", updatedCustomers, user?.uid);
+          if (user?.uid) {
+            saveUserContact(user.uid, {
+              name: customer.name,
+              type: 'Customer',
+              gstin: customer.gstin,
+              email: customer.email,
+              phone: customer.phone,
+              address: customer.address,
+              country: customer.country,
+            }).catch(e => console.warn("Cloud contact save fallback", e));
+          }
+        }
+      );
+    }
+
     const data: InvoiceData = getInvoiceData(finalDocId);
+    const syncId = impersonatedUser ? impersonatedUser.id : user?.uid;
+    const saveTimestamp = Date.now();
+    const currentIsoDate = new Date().toISOString();
 
     const baseHistoryItem = {
       id: finalDocId,
+      documentNumber: finalDocId,
       type: docType,
       date,
-      customerName: customer.name,
+      createdAt: currentIsoDate,
+      updatedAt: currentIsoDate,
+      partyName: customer.name || "Customer",
+      customerName: customer.name || "Customer",
+      customerCountry: customer.country || "",
       total: totals.convertedTotal,
+      totalAmount: totals.convertedTotal,
       inrTotal: totals.inrTotal,
       currency: currency || business.currency || "INR",
+      lineItemsCount: items.length,
+      itemsCount: items.length,
+      status: docType === DocumentType.TAX_INVOICE ? "Pending" : "Issued",
+      paymentStatus: "pending" as const,
+      userId: syncId,
       fullData: {
         ...data,
+        id: finalDocId,
         business: { 
           ...business, 
           letterhead: undefined,
@@ -4650,304 +5017,187 @@ export default function App() {
       }
     };
 
-    if (willCreateNewDocEntry) {
-      const newTimestamp = Date.now();
-      const historyItem: DocumentHistoryItem = {
+    let savedHistoryItem: DocumentHistoryItem;
+    let updatedHistoryList: DocumentHistoryItem[] = [];
+
+    if (isEditingExisting && existingDoc) {
+      const targetTimestamp = existingDoc.timestamp;
+      savedHistoryItem = {
         ...baseHistoryItem,
-        timestamp: newTimestamp,
+        timestamp: targetTimestamp, // Preserve original timestamp for stable document identity & cloud syncing
+        createdAt: existingDoc.createdAt || currentIsoDate,
+        updatedAt: currentIsoDate,
+        editCount: nextEditCount,
+      };
+
+      const list = historyRef.current && historyRef.current.length > 0 ? historyRef.current : (history || []);
+      const index = list.findIndex(item => item.timestamp === targetTimestamp);
+      if (index !== -1) {
+        updatedHistoryList = [...list];
+        updatedHistoryList[index] = savedHistoryItem;
+      } else {
+        updatedHistoryList = [savedHistoryItem, ...list.filter(item => !(item.id === finalDocId && item.type === docType))];
+      }
+      historyRef.current = updatedHistoryList;
+      setHistory(updatedHistoryList);
+      safeSave("document_history", updatedHistoryList, user?.uid);
+      seedReferenceHistoryFromDocumentHistory(updatedHistoryList);
+      setLoadedTimestamp(targetTimestamp);
+    } else {
+      savedHistoryItem = {
+        ...baseHistoryItem,
+        timestamp: saveTimestamp,
+        createdAt: currentIsoDate,
+        updatedAt: currentIsoDate,
         editCount: 0
       };
-      setHistory((prev) => {
-        const updated = [historyItem, ...(prev || [])];
-        safeSave("document_history", updated, user?.uid);
-        seedReferenceHistoryFromDocumentHistory(updated);
-        return updated;
-      });
-      setLoadedTimestamp(newTimestamp);
-    } else {
-      const targetTimestamp = existingDoc!.timestamp;
-      const historyItem: DocumentHistoryItem = {
-        ...baseHistoryItem,
-        timestamp: targetTimestamp,
-        editCount: nextEditCount
-      };
-      setHistory((prev) => {
-        const updated = (prev || []).map(item => {
-          if (item.timestamp === targetTimestamp) {
-            return historyItem;
-          }
-          return item;
-        });
-        safeSave("document_history", updated, user?.uid);
-        seedReferenceHistoryFromDocumentHistory(updated);
-        return updated;
-      });
+      const list = historyRef.current && historyRef.current.length > 0 ? historyRef.current : (history || []);
+      const filtered = list.filter(item => 
+        !(item.id === finalDocId && item.type === docType)
+      );
+      updatedHistoryList = [savedHistoryItem, ...filtered];
+      historyRef.current = updatedHistoryList;
+      setHistory(updatedHistoryList);
+      safeSave("document_history", updatedHistoryList, user?.uid);
+      seedReferenceHistoryFromDocumentHistory(updatedHistoryList);
+      setLoadedTimestamp(saveTimestamp);
     }
 
-    const customerPreferences = { isExport, currency, notes, terms };
-    if (docType === DocumentType.PURCHASE_ORDER) {
-      await autoSaveContactIfNew(
-        {
-          name: customer.name,
-          type: 'Supplier',
-          gstin: customer.gstin,
-          email: customer.email,
-          phone: customer.phone,
-          address: customer.address,
-          country: customer.country,
-          attentionPerson: customer.attentionPerson,
-        },
-        savedSuppliers as unknown as ContactEntity[],
-        async (newContact) => {
-          const exists = savedSuppliers.find(c => (c.name || "").toLowerCase() === (customer.name || "").toLowerCase());
-          let updatedSuppliers;
-          if (!exists) {
-            updatedSuppliers = [...savedSuppliers, { ...customer, ...customerPreferences, id: newContact.id || Math.random().toString(36).substr(2, 9) }];
-          } else {
-            updatedSuppliers = savedSuppliers.map(c => c.id === exists.id ? { ...customer, ...customerPreferences, id: c.id } : c);
-          }
-          setSavedSuppliers(updatedSuppliers);
-          safeSave("saved_suppliers", updatedSuppliers, user?.uid);
-        }
-      );
-    } else {
-      await autoSaveContactIfNew(
-        {
-          name: customer.name,
-          type: 'Customer',
-          gstin: customer.gstin,
-          email: customer.email,
-          phone: customer.phone,
-          address: customer.address,
-          country: customer.country,
-        },
-        savedCustomers as unknown as ContactEntity[],
-        async (newContact) => {
-          const exists = savedCustomers.find(c => (c.name || "").toLowerCase() === (customer.name || "").toLowerCase());
-          let updatedCustomers;
-          if (!exists) {
-            updatedCustomers = [...savedCustomers, { ...customer, ...customerPreferences, id: newContact.id || Math.random().toString(36).substr(2, 9) }];
-          } else {
-            updatedCustomers = savedCustomers.map(c => c.id === exists.id ? { ...customer, ...customerPreferences, id: c.id } : c);
-          }
-          setSavedCustomers(updatedCustomers);
-          safeSave("saved_customers", updatedCustomers, user?.uid);
-        }
+    // Consume quota credit for trial users when creating a new document or on 2nd+ edit
+    if (consumesQuota) {
+      const targetUid = impersonatedUser ? impersonatedUser.id : user?.uid;
+      const targetEmail = impersonatedUser?.email || user?.email || userProfile?.signupEmail || userProfile?.authEmail || "";
+      const optCount = incrementLocalUserDocCount(targetUid);
+      const optRemaining = Math.max(0, 5 - optCount);
+      const optExhausted = optRemaining <= 0;
+      setUserProfile((prev: any) => prev ? ({
+        ...prev,
+        documentsRemaining: optRemaining,
+        documentsUsed: optCount,
+        lifetimeCreatedCount: optCount,
+        totalGeneratedDocsCount: optCount,
+        trialExhausted: optExhausted,
+        ...(optExhausted && prev.planTier !== "pro" && prev.planTier !== "enterprise" ? {
+          planTier: "expired",
+          planName: "Trial Expired",
+          plan: "Trial Expired"
+        } : {})
+      }) : prev);
+
+      if (targetUid && targetEmail) {
+        consumeUserDocumentCredit(targetUid, targetEmail).then(({ remaining, exhausted, lifetimeCreatedCount }) => {
+          setUserProfile((prev: any) => prev ? ({
+            ...prev,
+            documentsRemaining: remaining,
+            documentsUsed: lifetimeCreatedCount,
+            lifetimeCreatedCount: lifetimeCreatedCount,
+            totalGeneratedDocsCount: lifetimeCreatedCount,
+            trialExhausted: exhausted,
+            ...(exhausted && prev.planTier !== "pro" && prev.planTier !== "enterprise" ? {
+              planTier: "expired",
+              planName: "Trial Expired",
+              plan: "Trial Expired"
+            } : {})
+          }) : prev);
+        }).catch(() => {});
+      }
+    }
+
+    // Persist to Cloud subcollection (Firestore users/{userId}/documents/{safeDocId})
+    if (syncId && savedHistoryItem) {
+      saveDocumentRecordToCloud(syncId, savedHistoryItem).catch(e => 
+        console.warn("Notice saving document to cloud subcollection:", e)
       );
     }
 
-    await syncToCloudData();
-    showShortcutToast("💾 Document saved to History & Recent Documents!");
+    // Update last used numbers
+    const prefix = getShortForm(business.name);
+    const typeCode = docType === DocumentType.TAX_INVOICE ? "INV" : 
+                    docType === DocumentType.QUOTATION ? "QT" : 
+                    docType === DocumentType.PURCHASE_ORDER ? "PO" : 
+                    docType === DocumentType.COST_SHEET ? "CS" : "DC";
+    const fullPrefix = `${prefix}/${typeCode}/`;
+    const safeKey = sanitizeKey(fullPrefix);
+    const parts = finalDocId.split('/');
+    const lastPart = parts[parts.length - 1];
+    const num = parseInt(lastPart) || 0;
+    
+    if (num > 0) {
+      setLastUsedNumbers(prev => ({
+        ...prev,
+        [safeKey]: Math.max(prev[safeKey] || 0, num)
+      }));
+    }
+
+    // Update price history
+    const historyEntries: PriceHistoryItem[] = items
+      .filter(item => item.description && item.rate > 0)
+      .map(item => ({
+        description: item.description,
+        rate: item.rate,
+        date,
+        customerName: customer.name
+      }));
+    
+    setPriceHistory(prev => [...historyEntries, ...prev].slice(0, 500)); // Keep last 500 entries
+
+    // Update remembered notes and terms
+    const category = docType === DocumentType.PURCHASE_ORDER ? "supplier" : "customer";
+    const subCategory = isExport ? "export" : "standard";
+    const safeCurrentNotes = sanitizeNotesAndTerms(lastUsedNotesAndTerms);
+    const newLastUsed = {
+      ...safeCurrentNotes,
+      [category]: {
+        ...safeCurrentNotes[category],
+        [subCategory]: { notes, terms }
+      }
+    };
+    setLastUsedNotesAndTerms(newLastUsed);
+    safeSave("last_used_notes_and_terms", newLastUsed, user?.uid);
+
+    syncToCloudData(updatedHistoryList).catch(() => {});
+
+    if (options?.showToast) {
+      showShortcutToast("💾 Document saved to history successfully!");
+    }
 
     if (isFirstDoc && !hasSubmittedFeedback) {
       setShowFeedbackModal(true);
     }
+
+    return { success: true, data, item: savedHistoryItem };
   };
 
   const generatePDF = async () => {
-    if (!business.name || !customer.name) {
-      showModal({
-        title: "Missing Details",
-        message: "Please fill in business and customer details.",
-        type: "warning"
-      });
-      return;
-    }
-
-    let checkDocId = docId;
-    if (loadedTimestamp && docType === DocumentType.QUOTATION && !checkDocId.includes("(R)")) {
-      checkDocId = `${checkDocId} (R)`;
-    }
-
-    const quotaCheck = checkSaveQuotaAndEdits(checkDocId);
-    if (!quotaCheck) return;
-
-    const { willCreateNewDocEntry, nextEditCount, existingDoc } = quotaCheck;
-    const isFirstDoc = (history || []).length === 0;
-
-    // Save customer/supplier if new or update if existing
-    const customerPreferences = { isExport, currency, notes, terms };
-    if (docType === DocumentType.PURCHASE_ORDER) {
-      await autoSaveContactIfNew(
-        {
-          name: customer.name,
-          type: 'Supplier',
-          gstin: customer.gstin,
-          email: customer.email,
-          phone: customer.phone,
-          address: customer.address,
-          country: customer.country,
-          attentionPerson: customer.attentionPerson,
-        },
-        savedSuppliers as unknown as ContactEntity[],
-        async (newContact) => {
-          const exists = savedSuppliers.find(c => (c.name || "").toLowerCase() === (customer.name || "").toLowerCase());
-          let updatedSuppliers;
-          if (!exists) {
-            updatedSuppliers = [...savedSuppliers, { ...customer, ...customerPreferences, id: newContact.id || Math.random().toString(36).substr(2, 9) }];
-          } else {
-            updatedSuppliers = savedSuppliers.map(c => c.id === exists.id ? { ...customer, ...customerPreferences, id: c.id } : c);
-          }
-          setSavedSuppliers(updatedSuppliers);
-          safeSave("saved_suppliers", updatedSuppliers, user?.uid);
-        }
-      );
-    } else {
-      await autoSaveContactIfNew(
-        {
-          name: customer.name,
-          type: 'Customer',
-          gstin: customer.gstin,
-          email: customer.email,
-          phone: customer.phone,
-          address: customer.address,
-          country: customer.country,
-        },
-        savedCustomers as unknown as ContactEntity[],
-        async (newContact) => {
-          const exists = savedCustomers.find(c => (c.name || "").toLowerCase() === (customer.name || "").toLowerCase());
-          let updatedCustomers;
-          if (!exists) {
-            updatedCustomers = [...savedCustomers, { ...customer, ...customerPreferences, id: newContact.id || Math.random().toString(36).substr(2, 9) }];
-          } else {
-            updatedCustomers = savedCustomers.map(c => c.id === exists.id ? { ...customer, ...customerPreferences, id: c.id } : c);
-          }
-          setSavedCustomers(updatedCustomers);
-          safeSave("saved_customers", updatedCustomers, user?.uid);
-        }
-      );
-    }
-
     setIsGenerating(true);
     try {
-      let finalDocId = docId;
-      // If we are revising a quotation, append (R) if not already present
-      if (loadedTimestamp && docType === DocumentType.QUOTATION && !finalDocId.includes("(R)")) {
-        finalDocId = `${finalDocId} (R)`;
-        setDocId(finalDocId);
+      // 1. Mandatorily save document to History, Local Storage, and Firestore before rendering PDF
+      const saveResult = await saveDocumentToHistory({ silent: true });
+      if (!saveResult.success || !saveResult.data) {
+        return;
       }
-
-      const data: InvoiceData = getInvoiceData(finalDocId);
-
-      const baseHistoryItem = {
-        id: finalDocId,
-        type: docType,
-        date,
-        customerName: customer.name,
-        total: totals.convertedTotal,
-        inrTotal: totals.inrTotal,
-        currency: currency || business.currency || "INR",
-        fullData: {
-          ...data,
-          business: { 
-            ...business, 
-            letterhead: undefined,
-            logo: undefined,
-            signature: undefined
-          }
-        }
-      };
-
-      if (willCreateNewDocEntry) {
-        const newTimestamp = Date.now();
-        const historyItem: DocumentHistoryItem = {
-          ...baseHistoryItem,
-          timestamp: newTimestamp,
-          editCount: 0
-        };
-        setHistory((prev) => {
-          const updated = [historyItem, ...(prev || [])];
-          safeSave("document_history", updated, user?.uid);
-          seedReferenceHistoryFromDocumentHistory(updated);
-          return updated;
-        });
-        setLoadedTimestamp(newTimestamp);
-      } else {
-        const targetTimestamp = existingDoc!.timestamp;
-        const historyItem: DocumentHistoryItem = {
-          ...baseHistoryItem,
-          timestamp: targetTimestamp,
-          editCount: nextEditCount
-        };
-        setHistory((prev) => {
-          const updated = (prev || []).map(item => {
-            if (item.timestamp === targetTimestamp) {
-              return historyItem;
-            }
-            return item;
-          });
-          safeSave("document_history", updated, user?.uid);
-          seedReferenceHistoryFromDocumentHistory(updated);
-          return updated;
-        });
-      }
-
-      // Update last used numbers
-      const prefix = getShortForm(business.name);
-      const typeCode = docType === DocumentType.TAX_INVOICE ? "INV" : 
-                      docType === DocumentType.QUOTATION ? "QT" : 
-                      docType === DocumentType.PURCHASE_ORDER ? "PO" : 
-                      docType === DocumentType.COST_SHEET ? "CS" : "DC";
-      const fullPrefix = `${prefix}/${typeCode}/`;
-      const safeKey = sanitizeKey(fullPrefix);
-      const parts = finalDocId.split('/');
-      const lastPart = parts[parts.length - 1];
-      const num = parseInt(lastPart) || 0;
-      
-      if (num > 0) {
-        setLastUsedNumbers(prev => ({
-          ...prev,
-          [safeKey]: Math.max(prev[safeKey] || 0, num)
-        }));
-      }
-
-      // Update price history
-      const historyEntries: PriceHistoryItem[] = items
-        .filter(item => item.description && item.rate > 0)
-        .map(item => ({
-          description: item.description,
-          rate: item.rate,
-          date,
-          customerName: customer.name
-        }));
-      
-      setPriceHistory(prev => [...historyEntries, ...prev].slice(0, 500)); // Keep last 500 entries
-
-      // Update remembered notes and terms
-      const category = docType === DocumentType.PURCHASE_ORDER ? "supplier" : "customer";
-      const subCategory = isExport ? "export" : "standard";
-      const safeCurrentNotes = sanitizeNotesAndTerms(lastUsedNotesAndTerms);
-      const newLastUsed = {
-        ...safeCurrentNotes,
-        [category]: {
-          ...safeCurrentNotes[category],
-          [subCategory]: { notes, terms }
-        }
-      };
-      setLastUsedNotesAndTerms(newLastUsed);
-      safeSave("last_used_notes_and_terms", newLastUsed, user?.uid);
 
       setIsTaxSummaryModalOpen(false);
-      await downloadInvoicePDF(data);
-      await syncToCloudData();
-      
-      // Refresh Doc ID for next document will happen via useEffect
+
+      // 2. Download generated PDF
+      await downloadInvoicePDF(saveResult.data);
+
+      showShortcutToast("📄 PDF generated & document saved to history!");
+
+      // 3. Reset form states for next new document
       setDocId(""); 
       setDiscountRate(0);
       setPaymentTerms("");
       setNumberOfPackages("");
       setAdvancePercentage(0);
       setLoadedTimestamp(null);
-
-      if (isFirstDoc && !hasSubmittedFeedback) {
-        setShowFeedbackModal(true);
-      }
     } catch (error) {
+      const syncId = impersonatedUser ? impersonatedUser.id : user?.uid;
       console.error("PDF Generation Error:", error);
       logErrorEvent(syncId, impersonatedUser?.email || user?.email, "Document Designer", "PDF Generation Error", error, "document");
       showModal({
-        title: "Generation Error",
-        message: "Failed to generate PDF. Please check your business details and items.",
+        title: "Generation Notice",
+        message: "Failed to generate document. Please check your inputs and try again.",
         type: "warning"
       });
     } finally {
@@ -4986,6 +5236,44 @@ export default function App() {
 
     setIsGenerating(true);
     try {
+      if (customer.name && customer.name.trim()) {
+        const customerPreferences = { isExport, currency, notes, terms };
+        await autoSaveContactIfNew(
+          {
+            name: customer.name,
+            type: 'Customer',
+            gstin: customer.gstin,
+            email: customer.email,
+            phone: customer.phone,
+            address: customer.address,
+            country: customer.country,
+          },
+          savedCustomers as unknown as ContactEntity[],
+          async (newContact) => {
+            const exists = savedCustomers.find(c => (c.name || "").toLowerCase() === (customer.name || "").toLowerCase());
+            let updatedCustomers;
+            if (!exists) {
+              updatedCustomers = [...savedCustomers, { ...customer, ...customerPreferences, id: newContact.id || Math.random().toString(36).substr(2, 9) }];
+            } else {
+              updatedCustomers = savedCustomers.map(c => c.id === exists.id ? { ...customer, ...customerPreferences, id: c.id } : c);
+            }
+            setSavedCustomers(updatedCustomers);
+            safeSave("saved_customers", updatedCustomers, user?.uid);
+            if (user?.uid) {
+              saveUserContact(user.uid, {
+                name: customer.name,
+                type: 'Customer',
+                gstin: customer.gstin,
+                email: customer.email,
+                phone: customer.phone,
+                address: customer.address,
+                country: customer.country,
+              }).catch(e => console.warn("Cloud contact save fallback", e));
+            }
+          }
+        );
+      }
+
       const dataToGenerate: InvoiceData = {
         ...getInvoiceData(nextChallanId),
         id: nextChallanId,
@@ -5001,16 +5289,26 @@ export default function App() {
       };
 
       const newTimestamp = Date.now();
+      const syncId = impersonatedUser ? impersonatedUser.id : user?.uid;
       const baseHistoryItem: DocumentHistoryItem = {
         id: nextChallanId,
+        documentNumber: nextChallanId,
         timestamp: newTimestamp,
         type: DocumentType.DELIVERY_CHALLAN,
         date: modalData.dispatchDate || date,
+        createdAt: new Date().toISOString(),
+        partyName: customer.name || dataToGenerate.customer?.name || "Customer",
         customerName: customer.name || dataToGenerate.customer?.name || "Customer",
-        customerCountry: customer.country || dataToGenerate.customer?.country,
+        customerCountry: customer.country || dataToGenerate.customer?.country || "",
         total: totals.convertedTotal,
+        totalAmount: totals.convertedTotal,
         inrTotal: totals.inrTotal,
         currency: currency || business.currency || "INR",
+        lineItemsCount: items.length,
+        itemsCount: items.length,
+        status: "Issued",
+        paymentStatus: "pending" as const,
+        userId: syncId,
         editCount: 0,
         fullData: {
           ...dataToGenerate,
@@ -5023,26 +5321,33 @@ export default function App() {
         }
       };
 
-      setHistory((prev) => {
-        const existingIdx = (prev || []).findIndex(item => item.id === nextChallanId);
-        let updated: DocumentHistoryItem[];
-        if (existingIdx !== -1) {
-          updated = [...(prev || [])];
-          updated[existingIdx] = {
-            ...baseHistoryItem,
-            timestamp: prev[existingIdx].timestamp || newTimestamp,
-            editCount: (prev[existingIdx].editCount || 0) + 1,
-          };
-        } else {
-          updated = [baseHistoryItem, ...(prev || [])];
-        }
-        safeSave("document_history", updated, user?.uid);
-        seedReferenceHistoryFromDocumentHistory(updated);
-        return updated;
-      });
+      let savedChallanItem = baseHistoryItem;
+      let updatedChallanList: DocumentHistoryItem[] = [];
+
+      const list = historyRef.current && historyRef.current.length > 0 ? historyRef.current : (history || []);
+      const existingIdx = list.findIndex(item => item.id === nextChallanId);
+      if (existingIdx !== -1) {
+        savedChallanItem = {
+          ...baseHistoryItem,
+          timestamp: list[existingIdx].timestamp || newTimestamp,
+          editCount: (list[existingIdx].editCount || 0) + 1,
+        };
+        updatedChallanList = [...list];
+        updatedChallanList[existingIdx] = savedChallanItem;
+      } else {
+        updatedChallanList = [baseHistoryItem, ...list];
+      }
+      historyRef.current = updatedChallanList;
+      setHistory(updatedChallanList);
+      safeSave("document_history", updatedChallanList, user?.uid);
+      seedReferenceHistoryFromDocumentHistory(updatedChallanList);
+
+      if (syncId && savedChallanItem) {
+        saveDocumentRecordToCloud(syncId, savedChallanItem).catch(e => console.warn("Notice saving delivery challan to cloud:", e));
+      }
 
       await downloadInvoicePDF(dataToGenerate);
-      await syncToCloudData();
+      await syncToCloudData(updatedChallanList);
       showShortcutToast("🚚 Delivery Challan generated successfully!");
     } catch (error) {
       console.error("Challan Generation Error:", error);
@@ -5296,37 +5601,52 @@ export default function App() {
       console.error("Cannot delete document: Missing timestamp");
       return;
     }
+    const docToDelete = (historyRef.current || history || []).find(h => String(h.timestamp) === String(timestamp));
     showModal({
       title: "Delete Document",
       message: "Are you sure you want to delete this document? This will also remove it from your cloud backup.",
       type: "confirm",
       onConfirm: async () => {
-        setHistory(prev => {
-          const updated = prev.filter(h => String(h.timestamp) !== String(timestamp));
-          safeSave("document_history", updated, user?.uid);
-          return updated;
-        });
+        const list = historyRef.current && historyRef.current.length > 0 ? historyRef.current : (history || []);
+        const updated = list.filter(h => String(h.timestamp) !== String(timestamp));
+        historyRef.current = updated;
+        setHistory(updated);
+        safeSave("document_history", updated, user?.uid);
+        seedReferenceHistoryFromDocumentHistory(updated);
         closeModal();
-        await syncToCloudData();
+        const syncId = impersonatedUser ? impersonatedUser.id : user?.uid;
+        if (syncId && docToDelete?.id) {
+          deleteDocumentRecordFromCloud(syncId, docToDelete.id, timestamp).catch(e => console.warn("Notice deleting doc from cloud subcollection:", e));
+        }
+        await syncToCloudData(updated);
       }
     });
   };
 
   const handleUpdatePaymentStatus = (timestamp: number, newStatus: "pending" | "paid" | "overdue" | "due_soon") => {
-    setHistory(prev => {
-      const updated = prev.map(item => {
-        if (String(item.timestamp) === String(timestamp)) {
-          return {
-            ...item,
-            paymentStatus: newStatus,
-          };
-        }
-        return item;
-      });
-      safeSave("document_history", updated, user?.uid);
-      return updated;
+    let updatedItem: DocumentHistoryItem | undefined;
+    const list = historyRef.current && historyRef.current.length > 0 ? historyRef.current : (history || []);
+    const updated = list.map(item => {
+      if (String(item.timestamp) === String(timestamp)) {
+        updatedItem = {
+          ...item,
+          paymentStatus: newStatus,
+          status: newStatus === "paid" ? "Paid" : "Issued",
+        };
+        return updatedItem;
+      }
+      return item;
     });
-    syncToCloudData();
+    historyRef.current = updated;
+    setHistory(updated);
+    safeSave("document_history", updated, user?.uid);
+    seedReferenceHistoryFromDocumentHistory(updated);
+
+    const syncId = impersonatedUser ? impersonatedUser.id : user?.uid;
+    if (syncId && updatedItem) {
+      saveDocumentRecordToCloud(syncId, updatedItem).catch(e => console.warn("Notice updating payment status in cloud:", e));
+    }
+    syncToCloudData(updated);
   };
 
   const downloadPDF = async (doc: DocumentHistoryItem) => {
@@ -5624,8 +5944,11 @@ export default function App() {
           }
         }}
         onSignOut={async () => {
+          purgeUnpartitionedCache(null);
           await logoutUser();
           setUser(null);
+          setUserProfile(null);
+          setImpersonatedUser(null);
           setShowLanding(true);
         }}
       />
@@ -5648,13 +5971,50 @@ export default function App() {
 
   // If Admin User is logged in, and Admin Console is active, and NOT impersonating
   if (isAdminUser(user) && isAdminConsoleActive && !impersonatedUser) {
+    if (!isAdminPinVerified) {
+      return (
+        <div className="w-full min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+          <AdminPinModal
+            isOpen={true}
+            userEmail={user?.email || userProfile?.signupEmail || userProfile?.authEmail || "admin"}
+            onSuccess={() => {
+              setIsAdminPinVerified(true);
+              setShowAdminPinModal(false);
+            }}
+            onCancel={() => {
+              setIsAdminConsoleActive(false);
+              setStep("dashboard");
+              setShowAdminPinModal(false);
+              if (user?.uid) {
+                try {
+                  localStorage.setItem(`billiq_user_${user.uid}_billiq_active_view`, "dashboard");
+                  localStorage.setItem("billiq_active_view", "dashboard");
+                } catch {}
+              }
+            }}
+          />
+        </div>
+      );
+    }
+
     return (
       <AdminDashboard
         adminUser={user}
         onImpersonateUser={handleImpersonateUser}
-        onExitAdminView={() => setIsAdminConsoleActive(false)}
+        onExitAdminView={() => {
+          setIsAdminConsoleActive(false);
+          setIsAdminPinVerified(false);
+          setStep("dashboard");
+          if (user?.uid) {
+            try {
+              localStorage.setItem(`billiq_user_${user.uid}_billiq_active_view`, "dashboard");
+              localStorage.setItem("billiq_active_view", "dashboard");
+            } catch {}
+          }
+        }}
         currentUserHistory={history}
         onUserUpdated={handleAdminUpdatedUser}
+        currency={currency || business.currency || "INR"}
       />
     );
   }
@@ -5682,27 +6042,29 @@ export default function App() {
       {/* Header */}
       <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-zinc-100 px-4 sm:px-6 md:px-8 lg:px-10 py-4">
         {isQuotaExceeded && (
-          <div className="mb-4 -mx-4 sm:-mx-6 md:-mx-8 lg:-mx-10 -mt-4 bg-rose-50 border-b border-rose-200 px-4 sm:px-6 md:px-8 lg:px-10 py-2.5">
+          <div className="mb-4 -mx-4 sm:-mx-6 md:-mx-8 lg:-mx-10 -mt-4 bg-amber-50 border-b border-amber-200 px-4 sm:px-6 md:px-8 lg:px-10 py-2.5">
             <div className="w-full max-w-[1600px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-start sm:items-center gap-2">
-                <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5 sm:mt-0 animate-pulse" />
-                <div className="text-rose-800 text-xs font-semibold">
-                  <span>Firebase Daily Free Quota Exceeded. Safely auto-switched to secure offline Local Browser Storage. All data is preserved.</span>
+                <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
+                <div className="text-amber-900 text-xs font-semibold">
+                  <span>Connection issue. Changes saved locally and will sync once reconnected.</span>
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <a 
-                  href="https://console.firebase.google.com/project/smart-bill-dd587/firestore/databases/ai-studio-9990095e-cbc6-4c8e-ade2-17ef7e3aa885/data?openUpgradeDialog=true" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="bg-rose-100 hover:bg-rose-200 text-rose-950 px-2.5 py-1 rounded text-xs font-bold transition-all whitespace-nowrap"
-                >
-                  Manage Quota / Upgrade DB
-                </a>
+                {isDeveloperAccount(impersonatedUser?.email || user?.email) && (
+                  <a 
+                    href="https://console.firebase.google.com/project/smart-bill-dd587/firestore/databases/ai-studio-9990095e-cbc6-4c8e-ade2-17ef7e3aa885/data?openUpgradeDialog=true" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="bg-amber-100 hover:bg-amber-200 text-amber-950 px-2.5 py-1 rounded text-xs font-bold transition-all whitespace-nowrap"
+                  >
+                    Manage Database
+                  </a>
+                )}
                 <button
                   type="button"
                   onClick={() => setIsQuotaExceeded(false)}
-                  className="text-rose-600 hover:text-rose-800 text-xs font-bold px-1 py-0.5"
+                  className="text-amber-700 hover:text-amber-900 text-xs font-bold px-1 py-0.5 cursor-pointer"
                 >
                   Dismiss
                 </button>
@@ -5719,15 +6081,87 @@ export default function App() {
             <Logo onClick={() => navigateToStep("dashboard")} />
           </motion.div>
 
+          {/* Top Navigation Menu (Desktop) */}
+          <nav className="hidden xl:flex items-center gap-1 bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/80">
+            <button
+              onClick={() => navigateToStep("dashboard")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                step === "dashboard"
+                  ? "bg-white text-brand-600 shadow-xs"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              <span>Dashboard</span>
+            </button>
+            <button
+              onClick={() => navigateToStep("analytics")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                step === "analytics"
+                  ? "bg-white text-brand-600 shadow-xs"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Analytics</span>
+            </button>
+            <button
+              onClick={() => navigateToStep("history")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                step === "history"
+                  ? "bg-white text-brand-600 shadow-xs"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>History</span>
+            </button>
+            <button
+              onClick={() => navigateToStep("customers")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                step === "customers"
+                  ? "bg-white text-brand-600 shadow-xs"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Customers</span>
+            </button>
+            <button
+              onClick={() => navigateToStep("suppliers")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                step === "suppliers"
+                  ? "bg-white text-brand-600 shadow-xs"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+            >
+              <Truck className="w-3.5 h-3.5" />
+              <span>Suppliers</span>
+            </button>
+            <button
+              onClick={() => navigateToStep("profile")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                step === "profile"
+                  ? "bg-white text-brand-600 shadow-xs"
+                  : "text-zinc-600 hover:text-zinc-900"
+              }`}
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>Profile & Settings</span>
+            </button>
+          </nav>
+
           {/* Right Group: Auto-save status, Country/Currency, New Bill CTA, User Sign Out */}
           <div className="flex items-center gap-2.5 shrink-0">
             {isAdminUser(user) && (
               <button
+                type="button"
                 onClick={() => {
                   if (impersonatedUser) {
                     handleExitImpersonation();
                   } else {
-                    setIsAdminConsoleActive(true);
+                    // ALWAYS prompt the PIN modal on every click to enter Admin Console
+                    setShowAdminPinModal(true);
                   }
                 }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
@@ -5751,21 +6185,30 @@ export default function App() {
             </button>
 
             {(() => {
+              const activeUid = impersonatedUser ? impersonatedUser.id : user?.uid;
               const rawPlan = userProfile?.planTier || userProfile?.planName || userProfile?.plan;
               const planInfo = getPlanDetails(rawPlan);
               const isPaidTier = planInfo.isUnlimited || planInfo.tier === "enterprise" || planInfo.tier === "pro";
-              const isAtLimit = !isPaidTier && (history || []).length >= planInfo.documentLimit;
+              const usedCount = getEffectiveLifetimeDocCount(userProfile, activeUid, (history || []).length);
+              const bonusCredits = userProfile?.trialCreditsGranted || 0;
+              const docLimit = (planInfo.documentLimit || 5) + bonusCredits;
+              const remaining = userProfile?.documentsRemaining !== undefined
+                ? userProfile.documentsRemaining
+                : Math.max(0, docLimit - usedCount);
+              const isAtLimit = !isPaidTier && remaining <= 0;
 
               let badgeText = "";
               if (planInfo.tier === "enterprise") {
                 badgeText = "Enterprise Plan";
               } else if (planInfo.tier === "pro") {
                 badgeText = "Pro Plan";
-              } else if (planInfo.tier === "expired") {
-                badgeText = "Trial Expired";
+              } else if (isAtLimit) {
+                badgeText = `Trial Expired (${usedCount}/${docLimit})`;
+              } else if (bonusCredits > 0 || userProfile?.founderGrantNotice) {
+                badgeText = `Bonus Free: ${remaining} Left`;
               } else {
-                // Free Trial or unpaid tier: display counter (e.g. "Free Trial: 7/5")
-                badgeText = `${planInfo.shortLabel}: ${(history || []).length}/${planInfo.documentLimit}`;
+                // Free Trial or unpaid tier: display counter (e.g. "Free Trial: 2/5")
+                badgeText = `${planInfo.shortLabel}: ${remaining} Left`;
               }
 
               return (
@@ -5780,14 +6223,18 @@ export default function App() {
                   className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all border cursor-pointer ${
                     isAtLimit
                       ? "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                      : bonusCredits > 0 || userProfile?.founderGrantNotice
+                      ? "bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100"
                       : `${planInfo.badgeBg} ${planInfo.badgeTextColor} ${planInfo.badgeBorderColor} ${planInfo.badgeHoverBg}`
                   }`}
-                  title={planInfo.description}
+                  title={bonusCredits > 0 ? `Founder Granted +${bonusCredits} Extra Docs! (${remaining} remaining)` : planInfo.description}
                 >
                   {planInfo.tier === "enterprise" ? (
                     <Sparkles className="h-3.5 w-3.5 text-purple-600 animate-pulse" />
                   ) : planInfo.tier === "pro" ? (
                     <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                  ) : bonusCredits > 0 ? (
+                    <Gift className="h-3.5 w-3.5 text-amber-600" />
                   ) : (
                     <Zap className="h-3.5 w-3.5 text-amber-600" />
                   )}
@@ -5854,6 +6301,18 @@ export default function App() {
               </button>
 
               <button
+                onClick={() => navigateToStep("analytics")}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                  step === "analytics"
+                    ? "bg-brand-600 text-white shadow-md shadow-brand-500/20"
+                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+                }`}
+              >
+                <BarChart3 className="w-4 h-4 shrink-0" />
+                <span>Analytics</span>
+              </button>
+
+              <button
                 onClick={() => navigateToStep("history")}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
                   step === "history"
@@ -5914,6 +6373,40 @@ export default function App() {
 
             {/* Right Main Content View Area */}
             <div className="lg:col-span-9 xl:col-span-9.5">
+              {/* Founder Free Documents Gift Banner */}
+              {userProfile?.documentsRemaining !== undefined && userProfile.documentsRemaining > 0 && (userProfile?.trialCreditsGranted || userProfile?.founderGrantNotice) && (
+                <div className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-4 rounded-2xl shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 border border-amber-300/40">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 shadow-inner">
+                      <Sparkles className="w-5 h-5 text-amber-100" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-wider bg-white/25 px-2 py-0.5 rounded-full text-white">
+                          Special Gift from Founder
+                        </span>
+                        <span className="text-xs font-bold text-amber-100">
+                          {userProfile.documentsRemaining} Free {userProfile.documentsRemaining === 1 ? "Document" : "Documents"} Available
+                        </span>
+                      </div>
+                      <p className="text-xs sm:text-sm font-extrabold text-white mt-0.5">
+                        🎉 Hurray! Founder gave you {userProfile.trialCreditsGranted || userProfile.founderGrantNotice?.grantedCount || 5} docs creation for free! Enjoy creating your invoices.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      handleNewDocument();
+                      setStep("invoice");
+                    }}
+                    className="px-4 py-2 bg-white hover:bg-amber-50 text-amber-900 rounded-xl text-xs font-black shadow-md transition-all cursor-pointer whitespace-nowrap self-start sm:self-auto shrink-0 flex items-center gap-1.5"
+                  >
+                    <span>Create Document Now</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               <AnimatePresence mode="wait">
                 {step === "dashboard" ? (
                   <motion.div
@@ -5929,6 +6422,7 @@ export default function App() {
                       suppliers={savedSuppliers} 
                       industry={business.industry}
                       letterhead={business.letterhead}
+                      currency={currency || business.currency || "INR"}
                       onNavigate={(s) => navigateToStep(s as any)}
                       onOpenDocument={loadDocument}
                       onDownloadPDF={downloadPDF}
@@ -5936,6 +6430,22 @@ export default function App() {
                       onClearHistory={clearHistory}
                       onViewAll={() => navigateToStep("history")}
                       onUpdatePaymentStatus={handleUpdatePaymentStatus}
+                    />
+                  </motion.div>
+                ) : step === "analytics" ? (
+                  <motion.div
+                    key="analytics"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
+                  >
+                    <AnalyticsView 
+                      history={history}
+                      customers={savedCustomers}
+                      currency={currency || business.currency || "INR"}
+                      onOpenDocument={loadDocument}
+                      onNavigate={(s) => navigateToStep(s as any)}
+                      onNewBill={handleNewDocument}
                     />
                   </motion.div>
                 ) : step === "history" ? (
@@ -6048,8 +6558,9 @@ export default function App() {
 
                   {/* Real-Time Subscription Plan Status Banner */}
                   {(() => {
+                    const activeUid = impersonatedUser ? impersonatedUser.id : user?.uid;
                     const planInfo = getPlanDetails(userProfile?.planTier || userProfile?.plan);
-                    const docCount = (history || []).length;
+                    const usedCount = getEffectiveLifetimeDocCount(userProfile, activeUid, (history || []).length);
                     return (
                       <div className="p-4 sm:p-5 rounded-2xl border border-zinc-200 bg-gradient-to-r from-zinc-50 via-white to-zinc-50 shadow-xs space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-zinc-200/80">
@@ -6090,7 +6601,7 @@ export default function App() {
                                   Unlimited Document Creation Unlocked
                                 </span>
                               ) : (
-                                <span>{docCount} of {planInfo.documentLimit} Documents Created</span>
+                                <span>{usedCount} of {planInfo.documentLimit} Documents Created</span>
                               )}
                             </p>
                           </div>
@@ -6230,7 +6741,7 @@ export default function App() {
                         Invoice Currency
                       </label>
                       <select
-                        value={currency}
+                        value={business.currency || currency || "INR"}
                         onChange={(e) => {
                           const newCurr = e.target.value;
                           setCurrency(newCurr);
@@ -6597,10 +7108,6 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="pt-6 border-t border-zinc-100">
-                    <MfaSettings />
-                  </div>
-
                   <div className="pt-4 border-t border-zinc-100">
                     <Button 
                       variant="outline" 
@@ -6682,6 +7189,22 @@ export default function App() {
         exit={{ opacity: 0, y: -10 }}
         className="space-y-6"
       >
+        {/* Founder Free Documents Gift Banner inside Invoice workspace */}
+        {userProfile?.documentsRemaining !== undefined && userProfile.documentsRemaining > 0 && (userProfile?.trialCreditsGranted || userProfile?.founderGrantNotice) && (
+          <div className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white px-4 py-3 rounded-2xl shadow-md flex items-center justify-between gap-3 border border-amber-300/40">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0">
+                <Sparkles className="w-4 h-4 text-amber-100" />
+              </div>
+              <div>
+                <p className="text-xs sm:text-sm font-extrabold text-white">
+                  🎉 Hurray! Founder gave you {userProfile.trialCreditsGranted || userProfile.founderGrantNotice?.grantedCount || 5} docs creation for free! ({userProfile.documentsRemaining} documents remaining)
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Back to dashboard header CTA inside invoice mode */}
         <div className="flex items-center justify-between pb-2 border-b border-zinc-200/60">
           <button
@@ -8866,9 +9389,10 @@ export default function App() {
                               });
                             }
                           } catch (err: any) {
+                            const activeEmail = impersonatedUser?.email || user?.email;
                             showModal({
                               title: "Generation failed",
-                              message: err?.message || "Could not run AI engine.",
+                              message: getDisplayErrorMessage(err, activeEmail, "Unable to generate details at this moment. Please try again or fill in the fields manually."),
                               type: "warning"
                             });
                           } finally {
@@ -8986,12 +9510,18 @@ export default function App() {
                     <span className="text-xs font-semibold text-zinc-400">Currency:</span>
                     <select 
                       value={currency}
-                      onChange={(e) => setCurrency(e.target.value)}
+                      onChange={(e) => {
+                        const newCurr = e.target.value;
+                        setCurrency(newCurr);
+                        if (!isExport) {
+                          handleBusinessChange({ currency: newCurr });
+                        }
+                      }}
                       className="bg-zinc-50 text-zinc-800 px-3 py-1.5 rounded-xl text-xs font-bold focus:outline-none border border-zinc-200 cursor-pointer"
                     >
                       {ALL_CURRENCIES.map((c) => (
                         <option key={c.code} value={c.code}>
-                          {c.code} - {c.name}
+                          {c.symbol} {c.code} - {c.name}
                         </option>
                       ))}
                     </select>
@@ -9059,7 +9589,7 @@ export default function App() {
                             >
                               {ALL_CURRENCIES.map((c) => (
                                 <option key={c.code} value={c.code}>
-                                  {c.code} - {c.name}
+                                  {c.symbol} {c.code} - {c.name}
                                 </option>
                               ))}
                             </select>
@@ -9132,7 +9662,7 @@ export default function App() {
                           />
                           <label htmlFor="is-tax-enabled-top" className="text-xs font-bold text-zinc-200 flex items-center gap-1.5 cursor-pointer select-none">
                             <Receipt className="h-3.5 w-3.5 text-zinc-400" />
-                            Apply Tax ({getCountryConfig(business.country || countryOfOrigin || "India").taxLabel || "GST/VAT"})
+                            Apply Tax ({getTaxName(business.country || countryOfOrigin || "India")})
                           </label>
                         </div>
 
@@ -9379,7 +9909,7 @@ export default function App() {
                           placeholder="e.g. Acme Warehousing Ltd"
                         />
                         <HistoryInput 
-                          label="Consignee Tax ID (VAT/GST/EIN)"
+                          label={`Consignee ${getRegionTaxLabel(customer.country || business.country || countryOfOrigin || "India")}`}
                           historyKey="consigneeGstin"
                           value={consigneeGstin ?? ""}
                           onChange={setConsigneeGstin}
@@ -9751,9 +10281,7 @@ export default function App() {
                                   setIsTaxEnabled(true);
                                   setAutoExportBadge(false);
                                   const sellerCfg = getCountryConfig(sellerCountry);
-                                  if (sellerCfg && sellerCfg.currencyCode) {
-                                    setCurrency(sellerCfg.currencyCode);
-                                  }
+                                  setCurrency(business.currency || (sellerCfg && sellerCfg.currencyCode) || "INR");
                                 }
                               }}
                               className="w-full p-2.5 bg-white border border-zinc-200 rounded-xl text-sm font-semibold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/5 cursor-pointer"
@@ -9767,8 +10295,8 @@ export default function App() {
                           </div>
                           <Input 
                             label={docType === DocumentType.PURCHASE_ORDER 
-                              ? `Supplier ${getCountryConfig(business.country || countryOfOrigin || "India").taxLabel}` 
-                              : `Customer ${getCountryConfig(business.country || countryOfOrigin || "India").taxLabel}`} 
+                              ? `Supplier ${getRegionTaxLabel(customer.country || business.country || countryOfOrigin || "India")}` 
+                              : `Customer ${getRegionTaxLabel(customer.country || business.country || countryOfOrigin || "India")}`} 
                             value={customer.gstin}
                             onChange={(e) => setCustomer({ ...customer, gstin: e.target.value })}
                             placeholder="Optional"
@@ -9834,12 +10362,18 @@ export default function App() {
                   <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Select Currency:</span>
                   <select
                     value={currency}
-                    onChange={(e) => setCurrency(e.target.value)}
+                    onChange={(e) => {
+                      const newCurr = e.target.value;
+                      setCurrency(newCurr);
+                      if (!isExport) {
+                        handleBusinessChange({ currency: newCurr });
+                      }
+                    }}
                     className="bg-zinc-50 hover:bg-zinc-100 text-zinc-900 border border-zinc-300 font-bold text-xs rounded-xl px-3.5 py-2 focus:outline-none focus:ring-2 focus:ring-brand-500/20 cursor-pointer shadow-xs min-w-[220px]"
                   >
                     {ALL_CURRENCIES.map((c) => (
                       <option key={c.code} value={c.code}>
-                        {c.code} - {c.name}
+                        {c.symbol} {c.code} - {c.name}
                       </option>
                     ))}
                   </select>
@@ -9892,14 +10426,14 @@ export default function App() {
                         )}
                         <VoiceInput 
                           onSuggestion={handleVoiceSuggestion} 
-                          onError={(msg) => showModal({ title: "Voice Input", message: msg, type: "warning" })}
+                          onError={(msg) => showModal({ title: "Voice Input", message: getDisplayErrorMessage(msg, impersonatedUser?.email || user?.email), type: "warning" })}
                           industry={business.industry} 
                           letterhead={business.letterhead}
                         />
                         <div id="document-upload-section">
                           <DocumentUpload 
                             onAnalysisComplete={handleAIAnalysis} 
-                            onError={(msg) => showModal({ title: "Smart Document Analysis", message: msg, type: "warning" })}
+                            onError={(msg) => showModal({ title: "Smart Document Analysis", message: getDisplayErrorMessage(msg, impersonatedUser?.email || user?.email), type: "warning" })}
                             industry={business.industry}
                             history={history}
                             letterhead={business.letterhead}
@@ -9928,6 +10462,8 @@ export default function App() {
                           customerName={customer.name}
                           allItems={items}
                           customBoxes={customBoxes}
+                          totalItemsCount={items.length}
+                          onReorder={reorderItems}
                         />
                       ))}
                     </div>
@@ -9939,6 +10475,27 @@ export default function App() {
                           <Plus className="h-4 w-4 mr-2" />
                           Add Item
                         </Button>
+                        {items.length > 0 && (
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => {
+                              exportCurrentDocumentItemsToCSV(items, {
+                                docId,
+                                docType,
+                                date,
+                                customerName: customer?.name,
+                                currency
+                              });
+                              showShortcutToast("📊 Exported line items to CSV (Excel ready)!");
+                            }}
+                            className="bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50 font-semibold"
+                            title="Export these line items directly to CSV / Excel spreadsheet"
+                          >
+                            <FileSpreadsheet className="h-4 w-4 mr-1.5 text-emerald-600" />
+                            Export Items (CSV)
+                          </Button>
+                        )}
                         {currency !== (business.currency || countryOfOrigin || "INR") && (
                           <div className="flex items-center gap-1.5 border-l pl-3 border-zinc-200">
                             <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Currency Convert:</span>
@@ -10022,53 +10579,103 @@ export default function App() {
 
               {/* Box Dimensions & Packaging Details (For Packaging List - Placed after Line Items & above Freight Charges) */}
               {docType === DocumentType.PACKING_LIST && (() => {
-                const itemBoxes = Array.from(new Set(items.map(i => i.boxNo).filter(Boolean))) as string[];
-                const allBoxNames = Array.from(new Set([...customBoxes, ...itemBoxes]));
+                const aggregatedBoxes = aggregateLineItemsForBoxes(
+                  items,
+                  customBoxes,
+                  boxDimensions,
+                  boxNetWeights,
+                  boxGrossWeights,
+                  boxQtyPacked
+                );
 
-                const boxList: BoxDimension[] = allBoxNames.map((bName) => ({
-                  boxNo: bName,
-                  dimensions: boxDimensions[bName] || "",
-                  netWeightOverride: boxNetWeights[bName] ?? "",
-                  grossWeightOverride: boxGrossWeights[bName] ?? "",
-                  packedQty: parseFloat(boxQtyPacked[bName] ?? "") || 0,
-                }));
-
-                const handleUpdateBox = (index: number, updatedBox: BoxDimension) => {
-                  const oldName = allBoxNames[index];
-                  const newName = updatedBox.boxNo || oldName;
+                const handleUpdateBox = (index: number, updatedBox: Partial<AggregatedBoxRow> & { boxNo?: string }) => {
+                  const currentBox = aggregatedBoxes[index];
+                  if (!currentBox) return;
+                  const oldName = currentBox.boxNo;
+                  const newName = (updatedBox.boxNo !== undefined ? updatedBox.boxNo.trim() : oldName) || oldName;
 
                   if (oldName && newName !== oldName) {
                     setCustomBoxes(prev => prev.map(b => b === oldName ? newName : b));
 
                     const newDims = { ...boxDimensions };
                     delete newDims[oldName];
-                    if (updatedBox.dimensions) newDims[newName] = updatedBox.dimensions;
+                    if (updatedBox.dimensions !== undefined ? updatedBox.dimensions : currentBox.dimensions) {
+                      newDims[newName] = updatedBox.dimensions !== undefined ? updatedBox.dimensions : currentBox.dimensions;
+                    }
                     setBoxDimensions(newDims);
 
                     const newNets = { ...boxNetWeights };
                     delete newNets[oldName];
-                    if (updatedBox.netWeightOverride) newNets[newName] = updatedBox.netWeightOverride;
+                    if (updatedBox.netWeightOverride !== undefined ? updatedBox.netWeightOverride : currentBox.netWeightOverride) {
+                      newNets[newName] = updatedBox.netWeightOverride !== undefined ? updatedBox.netWeightOverride : currentBox.netWeightOverride;
+                    }
                     setBoxNetWeights(newNets);
 
                     const newGross = { ...boxGrossWeights };
                     delete newGross[oldName];
-                    if (updatedBox.grossWeightOverride) newGross[newName] = updatedBox.grossWeightOverride;
+                    if (updatedBox.grossWeightOverride !== undefined ? updatedBox.grossWeightOverride : currentBox.grossWeightOverride) {
+                      newGross[newName] = updatedBox.grossWeightOverride !== undefined ? updatedBox.grossWeightOverride : currentBox.grossWeightOverride;
+                    }
                     setBoxGrossWeights(newGross);
 
                     const newQty = { ...boxQtyPacked };
                     delete newQty[oldName];
-                    if (updatedBox.packedQty) newQty[newName] = String(updatedBox.packedQty);
+                    if (updatedBox.packedQtyOverride !== undefined ? updatedBox.packedQtyOverride : currentBox.packedQtyOverride) {
+                      newQty[newName] = updatedBox.packedQtyOverride !== undefined ? updatedBox.packedQtyOverride : currentBox.packedQtyOverride;
+                    }
                     setBoxQtyPacked(newQty);
                   } else {
-                    setBoxDimensions(prev => ({ ...prev, [oldName]: updatedBox.dimensions }));
-                    setBoxNetWeights(prev => ({ ...prev, [oldName]: updatedBox.netWeightOverride }));
-                    setBoxGrossWeights(prev => ({ ...prev, [oldName]: updatedBox.grossWeightOverride }));
-                    setBoxQtyPacked(prev => ({ ...prev, [oldName]: updatedBox.packedQty ? String(updatedBox.packedQty) : "" }));
+                    if (updatedBox.dimensions !== undefined) {
+                      setBoxDimensions(prev => ({ ...prev, [oldName]: updatedBox.dimensions || '' }));
+                    }
+                    if (updatedBox.netWeightOverride !== undefined) {
+                      setBoxNetWeights(prev => ({ ...prev, [oldName]: updatedBox.netWeightOverride || '' }));
+                    }
+                    if (updatedBox.grossWeightOverride !== undefined) {
+                      setBoxGrossWeights(prev => ({ ...prev, [oldName]: updatedBox.grossWeightOverride || '' }));
+                    }
+                    if (updatedBox.packedQtyOverride !== undefined) {
+                      setBoxQtyPacked(prev => ({ ...prev, [oldName]: updatedBox.packedQtyOverride || '' }));
+                    }
                   }
                 };
 
+                const handleResetBox = (boxName: string) => {
+                  setBoxNetWeights(prev => {
+                    const next = { ...prev };
+                    delete next[boxName];
+                    return next;
+                  });
+                  setBoxGrossWeights(prev => {
+                    const next = { ...prev };
+                    delete next[boxName];
+                    return next;
+                  });
+                  setBoxQtyPacked(prev => {
+                    const next = { ...prev };
+                    delete next[boxName];
+                    return next;
+                  });
+                };
+
+                const handleResetAll = () => {
+                  setBoxNetWeights({});
+                  setBoxGrossWeights({});
+                  setBoxQtyPacked({});
+                };
+
+                const handleAutoSync = () => {
+                  const itemBoxes = Array.from(new Set(items.map(i => (i.boxNo || '').trim()).filter(Boolean)));
+                  setCustomBoxes(prev => Array.from(new Set([...prev, ...itemBoxes])));
+                  setBoxNetWeights({});
+                  setBoxGrossWeights({});
+                  setBoxQtyPacked({});
+                };
+
                 const handleRemoveBox = (index: number) => {
-                  const boxName = allBoxNames[index];
+                  const currentBox = aggregatedBoxes[index];
+                  if (!currentBox) return;
+                  const boxName = currentBox.boxNo;
                   setCustomBoxes(prev => prev.filter(b => b !== boxName));
                   const newDims = { ...boxDimensions }; delete newDims[boxName]; setBoxDimensions(newDims);
                   const newNets = { ...boxNetWeights }; delete newNets[boxName]; setBoxNetWeights(newNets);
@@ -10077,8 +10684,8 @@ export default function App() {
                 };
 
                 const handleAddBox = () => {
-                  const nextNum = allBoxNames.length + 1;
-                  const newBox = `Box ${nextNum}`;
+                  const existingCount = aggregatedBoxes.length;
+                  const newBox = `Box ${existingCount + 1}`;
                   if (!customBoxes.includes(newBox)) {
                     setCustomBoxes(prev => [...prev, newBox]);
                   }
@@ -10086,8 +10693,11 @@ export default function App() {
 
                 return (
                   <BoxDimensionsTable 
-                    boxes={boxList}
+                    boxes={aggregatedBoxes}
                     onUpdateBox={handleUpdateBox}
+                    onResetBox={handleResetBox}
+                    onResetAll={handleResetAll}
+                    onAutoSync={handleAutoSync}
                     onRemoveBox={handleRemoveBox}
                     onAddBox={handleAddBox}
                   />
@@ -10534,7 +11144,7 @@ export default function App() {
                                     onChange={(e) => setIsTaxEnabled(e.target.checked)}
                                     className="w-4 h-4 accent-emerald-500 rounded border-white/20 focus:ring-emerald-500 cursor-pointer"
                                   />
-                                  Apply Tax ({getCountryConfig(business.country || countryOfOrigin || "India").taxLabel || "GST/VAT"})
+                                  Apply Tax ({getTaxName(business.country || countryOfOrigin || "India")})
                                 </label>
                                 <span className={`text-[10px] font-extrabold tracking-wider px-2 py-0.5 rounded ${isTaxEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-white/10 text-zinc-400'}`}>
                                   {isTaxEnabled ? "TAX ON" : "TAX OFF"}
@@ -10844,7 +11454,7 @@ export default function App() {
                           type="button"
                           variant="outline"
                           className="w-full border-white/20 text-white hover:bg-white/10 h-13 text-sm font-bold flex items-center justify-center gap-2 cursor-pointer shadow-lg"
-                          onClick={saveDocumentToHistory}
+                          onClick={() => saveDocumentToHistory({ showToast: true })}
                           isLoading={isGenerating}
                           disabled={hasErrors}
                         >
@@ -10891,40 +11501,40 @@ export default function App() {
       />
 
       {/* Mobile Bottom Nav (Quick Actions) */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-200 p-4 sm:hidden flex justify-around items-center z-40 pb-safe">
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-200 py-2.5 px-2 sm:hidden flex justify-around items-center z-40 pb-safe">
         <button 
-          className={`flex flex-col items-center gap-1 ${step === "dashboard" ? "text-brand-600" : "text-zinc-400"}`}
+          className={`flex flex-col items-center gap-0.5 ${step === "dashboard" ? "text-brand-600 font-bold" : "text-zinc-400"}`}
           onClick={() => navigateToStep("dashboard")}
         >
           <LayoutDashboard className="h-5 w-5" />
-          <span className="text-[10px] font-bold uppercase">Home</span>
+          <span className="text-[9px] uppercase">Home</span>
         </button>
         <button 
-          className={`flex flex-col items-center gap-1 ${step === "customers" ? "text-brand-600" : "text-zinc-400"}`}
-          onClick={() => navigateToStep("customers")}
+          className={`flex flex-col items-center gap-0.5 ${step === "analytics" ? "text-brand-600 font-bold" : "text-zinc-400"}`}
+          onClick={() => navigateToStep("analytics")}
         >
-          <Users className="h-5 w-5" />
-          <span className="text-[10px] font-bold uppercase">Parties</span>
+          <BarChart3 className="h-5 w-5" />
+          <span className="text-[9px] uppercase">Analytics</span>
         </button>
         <button 
-          className="w-14 h-14 bg-zinc-900 text-white rounded-full flex items-center justify-center -mt-10 shadow-xl shadow-zinc-900/20 border-4 border-white disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-12 h-12 bg-zinc-900 text-white rounded-full flex items-center justify-center -mt-8 shadow-xl shadow-zinc-900/20 border-4 border-white disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={handleNewDocument}
         >
-          <Plus className="h-7 w-7" />
+          <Plus className="h-6 w-6" />
         </button>
         <button 
-          className={`flex flex-col items-center gap-1 ${step === "history" ? "text-brand-600" : "text-zinc-400"}`}
+          className={`flex flex-col items-center gap-0.5 ${step === "history" ? "text-brand-600 font-bold" : "text-zinc-400"}`}
           onClick={() => navigateToStep("history")}
         >
           <Clock className="h-5 w-5" />
-          <span className="text-[10px] font-bold uppercase">History</span>
+          <span className="text-[9px] uppercase">History</span>
         </button>
         <button 
-          className={`flex flex-col items-center gap-1 ${step === "profile" ? "text-brand-600" : "text-zinc-400"}`}
+          className={`flex flex-col items-center gap-0.5 ${step === "profile" ? "text-brand-600 font-bold" : "text-zinc-400"}`}
           onClick={() => navigateToStep("profile")}
         >
           <Settings className="h-5 w-5" />
-          <span className="text-[10px] font-bold uppercase">Profile</span>
+          <span className="text-[9px] uppercase">Profile</span>
         </button>
       </div>
 
@@ -10981,7 +11591,7 @@ export default function App() {
                 </div>
               ) : (
                 history
-                  .filter(h => h.type !== DocumentType.PACKING_LIST)
+                  .slice()
                   .sort((a, b) => b.timestamp - a.timestamp)
                   .map((doc, idx) => (
                     <button
@@ -11221,13 +11831,36 @@ export default function App() {
           setShowTrialLimitModal(false);
           setTrialModalCustomMessage(undefined);
         }}
-        documentCount={(history || []).length}
+        documentCount={getEffectiveLifetimeDocCount(userProfile, impersonatedUser ? impersonatedUser.id : user?.uid)}
         planName={getPlanDetails(userProfile?.planTier || userProfile?.plan).badgeText}
         planTier={userProfile?.planTier || userProfile?.plan}
-        maxLimit={getPlanDetails(userProfile?.planTier || userProfile?.plan).documentLimit}
+        maxLimit={(getPlanDetails(userProfile?.planTier || userProfile?.plan).documentLimit || 5) + (userProfile?.trialCreditsGranted || 0)}
+        documentsRemaining={userProfile?.documentsRemaining}
         isReRegisteredUser={userProfile?.isReRegisteredUser}
         customMessage={trialModalCustomMessage}
       />
+
+      <AdminPinModal
+        isOpen={showAdminPinModal}
+        userEmail={user?.email || userProfile?.signupEmail || userProfile?.authEmail || "admin"}
+        onSuccess={() => {
+          setIsAdminPinVerified(true);
+          setShowAdminPinModal(false);
+          setIsAdminConsoleActive(true);
+          if (user?.uid) {
+            try {
+              localStorage.setItem(`billiq_user_${user.uid}_billiq_active_view`, "admin");
+              localStorage.setItem("billiq_active_view", "admin");
+            } catch {}
+          }
+        }}
+        onCancel={() => {
+          setShowAdminPinModal(false);
+        }}
+      />
+
+      {/* Vercel Web Analytics */}
+      <Analytics />
     </div>
   );
 }

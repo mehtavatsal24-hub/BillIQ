@@ -63,6 +63,7 @@ export const Footer: React.FC<FooterProps> = ({
   const [feedbackType, setFeedbackType] = useState<"general" | "bug" | "feature">("general");
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackRating, setFeedbackRating] = useState<number>(5);
+  const [feedbackUserEmail, setFeedbackUserEmail] = useState("");
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
 
   // Support form state
@@ -83,7 +84,7 @@ export const Footer: React.FC<FooterProps> = ({
           category: feedbackType,
           rating: feedbackRating,
           feedbackText,
-          userEmail: OWNER_EMAIL,
+          userEmail: feedbackUserEmail.trim() || undefined,
         }),
       });
     } catch (err) {
@@ -488,6 +489,17 @@ export const Footer: React.FC<FooterProps> = ({
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-700 mb-1">Your Email Address <span className="text-zinc-500 font-normal">(for direct reply)</span></label>
+                <input
+                  type="email"
+                  value={feedbackUserEmail}
+                  onChange={(e) => setFeedbackUserEmail(e.target.value)}
+                  placeholder="e.g. name@company.com"
+                  className="w-full text-xs p-2.5 rounded-lg border border-zinc-300 focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                />
               </div>
 
               <div>

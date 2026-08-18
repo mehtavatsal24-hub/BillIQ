@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Trash2, History, Wand2, Loader2, Zap, ChevronDown } from "lucide-react";
+import { Trash2, History, Wand2, Loader2, Zap, ChevronDown, GripVertical, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Input } from "./Input";
 import { Button } from "./Button";
@@ -7,7 +7,6 @@ import { LineItem, PriceHistoryItem, DocumentType, BusinessDetails } from "../ty
 import { TAX_RATES, UNITS, CURRENCY_SYMBOLS } from "../constants";
 import { getCountryConfig, getTaxName, getCountryTaxRates, getCurrencySymbol } from "../utils/localization";
 import { ProductAutocomplete } from "./ProductAutocomplete";
-import { expandTechnicalSpec } from "../services/technicalService";
 import { analyzePriceAnomaly, searchAndGetHSN, estimateItemWeight, checkForLocalOrCatalogWeight, getFriendlyGeminiError } from "../services/geminiService";
 import { validateHSN, validatePositiveNumber } from "../lib/validation";
 
@@ -26,6 +25,8 @@ interface LineItemRowProps {
   customerName?: string;
   allItems: LineItem[];
   customBoxes?: string[];
+  totalItemsCount?: number;
+  onReorder?: (fromIndex: number, toIndex: number) => void;
 }
 
 const getManualWeightMemory = (desc: string): number | null => {
@@ -130,12 +131,14 @@ const TaxRateInput: React.FC<TaxRateInputProps> = ({
         <input
           type="text"
           inputMode="decimal"
+          draggable={false}
+          onMouseDown={(e) => e.stopPropagation()}
           value={inputValue}
           onChange={handleChange}
           onFocus={() => setIsOpen(true)}
           disabled={disabled}
           placeholder="0"
-          className="w-full pl-2.5 pr-10 py-3 bg-white border border-zinc-200 rounded-xl text-xs sm:text-sm font-semibold text-zinc-900 focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 transition-all duration-200 disabled:bg-zinc-50 disabled:text-zinc-400"
+          className="w-full pl-2.5 pr-10 py-3 bg-white border border-zinc-200 rounded-xl text-xs sm:text-sm font-semibold text-zinc-900 focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 transition-all duration-200 disabled:bg-zinc-50 disabled:text-zinc-400 select-text"
         />
         <div className="absolute right-2 flex items-center gap-1">
           <span className="text-xs font-bold text-zinc-400 pointer-events-none">%</span>
@@ -164,6 +167,7 @@ const TaxRateInput: React.FC<TaxRateInputProps> = ({
                 type="button"
                 onMouseDown={(e) => {
                   e.preventDefault();
+                  e.stopPropagation();
                   handleSelectSuggestion(rate);
                 }}
                 className={`w-full text-left px-3 py-2 hover:bg-brand-50 hover:text-brand-700 flex items-center justify-between transition-colors cursor-pointer ${
@@ -201,9 +205,10 @@ export const LineItemRow = ({
   business,
   customerName,
   allItems,
-  customBoxes = []
+  customBoxes = [],
+  totalItemsCount = 1,
+  onReorder
 }: LineItemRowProps) => {
-  const [isExpanding, setIsExpanding] = useState(false);
   const [isSearchingHsn, setIsSearchingHsn] = useState(false);
   const [isCheckingPrice, setIsCheckingPrice] = useState(false);
   const [isEstimatingWeight, setIsEstimatingWeight] = useState(false);
@@ -211,6 +216,7 @@ export const LineItemRow = ({
   const [prevDescForWeight, setPrevDescForWeight] = useState(item.description || "");
   const [priceAlert, setPriceAlert] = useState<{ severity: string; message: string } | null>(null);
   const [errors, setErrors] = useState<Record<string, string | undefined>>({});
+  const [isDragOver, setIsDragOver] = useState(false);
   const isQuotation = docType === DocumentType.QUOTATION;
   const isTaxVisible = isTaxEnabled;
   const isPackingList = docType === DocumentType.PACKING_LIST;
@@ -359,53 +365,65 @@ export const LineItemRow = ({
         onUpdate(item.id, { hsn: hsnCode });
       }
     } catch (err: any) {
-      const msg = err?.message || "Failed to search HSN code.";
+      const msg = "Unable to find HSN code at this moment. Please enter manually.";
       setHsnSearchError(msg);
-      console.warn("HSN Search failed action:", msg);
+      console.warn("HSN Search failed action:", err);
     } finally {
       setIsSearchingHsn(false);
     }
   };
 
-  const handleExpand = async () => {
-    if (!item.description || item.description.trim().length < 2) return;
-    
-    setIsExpanding(true);
-    setHsnSearchError(null);
-    try {
-      const expanded = await expandTechnicalSpec(item.description, business?.industry, business?.letterhead);
-      onUpdate(item.id, { description: expanded });
-      
-      // Auto HSN Search using the highly specific expanded description
-      setIsSearchingHsn(true);
-      try {
-        const hsnCode = await searchAndGetHSN(expanded);
-        if (hsnCode) {
-          onUpdate(item.id, { description: expanded, hsn: hsnCode });
-        }
-      } catch (err: any) {
-        const msg = err?.message || "Auto-search HSN failed.";
-        setHsnSearchError(msg);
-        console.warn("Auto HSN Search failed on expand action:", msg);
-      } finally {
-        setIsSearchingHsn(false);
-      }
-    } finally {
-      setIsExpanding(false);
-    }
-  };
-
   return (
-    <div className={`grid grid-cols-12 gap-3 sm:gap-4 items-start py-4 sm:py-6 border-b border-zinc-100 last:border-0 group/row transition-all duration-300 ${
+    <div 
+      onDragOver={(e) => {
+        if (!onReorder) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      }}
+      onDragEnter={(e) => {
+        if (!onReorder) return;
+        e.preventDefault();
+        setIsDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (!onReorder) return;
+        setIsDragOver(false);
+      }}
+      onDrop={(e) => {
+        if (!onReorder) return;
+        e.preventDefault();
+        setIsDragOver(false);
+        const fromIdxStr = e.dataTransfer.getData("text/plain");
+        const fromIdx = parseInt(fromIdxStr, 10);
+        if (!isNaN(fromIdx) && fromIdx !== index) {
+          onReorder(fromIdx, index);
+        }
+      }}
+      className={`grid grid-cols-12 gap-3 sm:gap-4 items-start py-4 sm:py-6 border-b border-zinc-100 last:border-0 group/row transition-all duration-300 ${
       item.isRegret ? 'bg-red-50/30' : ''
     } ${
       item.isAiEdited 
         ? 'bg-violet-50/50 border-l-4 border-l-violet-600 pl-3 sm:pl-4 my-2 rounded-r-2xl shadow-xs ring-1 ring-violet-200/80' 
         : ''
+    } ${
+      isDragOver ? 'bg-brand-50/80 ring-2 ring-brand-400/70 border-brand-200 rounded-xl' : ''
     }`}>
       <div className={(isQA || isDimensional) ? "col-span-12 md:col-span-7" : (isPackingList || isCostSheet ? "col-span-12 md:col-span-3" : (isTaxVisible ? "col-span-12 md:col-span-3" : "col-span-12 md:col-span-4"))}>
         <div className="relative group">
-          <div className="flex items-center gap-2 mb-1.5 ml-1">
+          <div className="flex items-center gap-1.5 mb-1.5 ml-1">
+            {onReorder && (
+              <div 
+                draggable={true}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("text/plain", index.toString());
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                className="flex items-center text-zinc-300 group-hover/row:text-zinc-600 cursor-grab active:cursor-grabbing p-0.5 rounded hover:bg-zinc-100 transition-colors select-none"
+                title="Drag to reorder line items"
+              >
+                <GripVertical className="w-4 h-4 shrink-0 pointer-events-none" />
+              </div>
+            )}
             <span className={`flex items-center justify-center min-w-6 h-5 px-1.5 rounded-md text-[10px] font-black transition-all ${
               item.isAiEdited 
                 ? "bg-gradient-to-r from-violet-600 to-indigo-600 text-white border border-violet-400 shadow-xs shadow-violet-500/30 ring-2 ring-violet-400/40 animate-pulse" 
@@ -413,6 +431,30 @@ export const LineItemRow = ({
             }`}>
               {index + 1}
             </span>
+
+            {onReorder && totalItemsCount > 1 && (
+              <div className="flex items-center gap-0.5 ml-0.5">
+                <button
+                  type="button"
+                  onClick={() => index > 0 && onReorder(index, index - 1)}
+                  disabled={index === 0}
+                  className="p-0.5 text-zinc-400 hover:text-zinc-800 disabled:opacity-20 disabled:hover:text-zinc-400 rounded hover:bg-zinc-100 transition-all cursor-pointer"
+                  title="Move Item Up"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => index < totalItemsCount - 1 && onReorder(index, index + 1)}
+                  disabled={index >= totalItemsCount - 1}
+                  className="p-0.5 text-zinc-400 hover:text-zinc-800 disabled:opacity-20 disabled:hover:text-zinc-400 rounded hover:bg-zinc-100 transition-all cursor-pointer"
+                  title="Move Item Down"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
             {item.isAiEdited && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-600 text-white text-[9.5px] font-black uppercase tracking-wider shadow-xs animate-in fade-in zoom-in duration-300">
                 <Wand2 className="w-2.5 h-2.5 text-yellow-300 shrink-0" /> Modified
@@ -432,20 +474,6 @@ export const LineItemRow = ({
             placeholder="Product name..."
             customerName={customerName}
           />
-          {item.description && item.description.length > 3 && (
-            <button
-              onClick={handleExpand}
-              disabled={isExpanding}
-              className="absolute right-10 top-[42px] p-1.5 text-zinc-300 hover:text-brand-600 transition-all disabled:opacity-50 z-10 hover:bg-brand-50 rounded-lg"
-              title="Expand to technical spec"
-            >
-              {isExpanding ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Wand2 className="h-4 w-4" />
-              )}
-            </button>
-          )}
         </div>
       </div>
 
@@ -456,6 +484,8 @@ export const LineItemRow = ({
                 <label className="flex items-center gap-3 cursor-pointer group/regret px-4 py-2 bg-white border border-zinc-200 rounded-xl hover:border-red-200 hover:bg-red-50/50 transition-all duration-200">
                   <input 
                     type="checkbox" 
+                    draggable={false}
+                    onMouseDown={(e) => e.stopPropagation()}
                     checked={item.isRegret ?? false}
                     onChange={(e) => onUpdate(item.id, { isRegret: e.target.checked })}
                     className="w-4 h-4 rounded border-zinc-300 text-red-600 focus:ring-red-500 transition-colors"
@@ -615,7 +645,9 @@ export const LineItemRow = ({
           <div className="col-span-3 md:col-span-1">
             <label className="block text-xs font-extrabold text-zinc-500 uppercase tracking-widest mb-1.5 ml-1">Unit</label>
             <select
-              className="w-full px-3 py-3 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 transition-all duration-200"
+              draggable={false}
+              onMouseDown={(e) => e.stopPropagation()}
+              className="w-full px-3 py-3 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 transition-all duration-200 select-text"
               value={item.unit ?? "NOS"}
               onChange={(e) => onUpdate(item.id, { unit: e.target.value })}
               disabled={item.isRegret}
@@ -750,7 +782,9 @@ export const LineItemRow = ({
           <div className="col-span-4 md:col-span-1">
             <label className="block text-xs font-extrabold text-zinc-500 uppercase tracking-widest mb-1.5 ml-1">Unit</label>
             <select
-              className="w-full px-3 py-3 bg-white border border-zinc-200 rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 transition-all duration-200 disabled:bg-zinc-50 disabled:text-zinc-400"
+              draggable={false}
+              onMouseDown={(e) => e.stopPropagation()}
+              className="w-full px-2.5 py-3 bg-white border border-zinc-200 rounded-xl text-xs sm:text-sm font-semibold text-zinc-800 focus:outline-none focus:ring-4 focus:ring-brand-500/10 focus:border-brand-500 transition-all duration-200 disabled:bg-zinc-50 disabled:text-zinc-400 select-text cursor-pointer"
               value={item.unit ?? "NOS"}
               onChange={(e) => onUpdate(item.id, { unit: e.target.value })}
               disabled={item.isRegret}
@@ -768,6 +802,8 @@ export const LineItemRow = ({
               <label className="flex items-center gap-1.5 cursor-pointer group/regret">
                 <input 
                   type="checkbox" 
+                  draggable={false}
+                  onMouseDown={(e) => e.stopPropagation()}
                   checked={item.isRegret ?? false}
                   onChange={(e) => onUpdate(item.id, { isRegret: e.target.checked })}
                   className="w-3 h-3 rounded border-zinc-300 text-red-600 focus:ring-red-500 transition-colors"
@@ -827,7 +863,7 @@ export const LineItemRow = ({
           </div>
           {isTaxVisible && (() => {
             const countryCfg = getCountryConfig(business?.country || "India");
-            const taxLabelName = getTaxName(countryCfg.taxSystem);
+            const taxLabelName = getTaxName(business?.country || "India");
 
             return (
               <div className="col-span-6 md:col-span-1">

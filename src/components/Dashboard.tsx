@@ -28,8 +28,8 @@ import {
 import { Card, CardHeader, CardContent } from "./Card";
 import { Button } from "./Button";
 import { DocumentHistoryItem, PriceHistoryItem, SavedCustomer, SavedSupplier, DocumentType } from "../types";
-import { getCurrencySymbol } from "../utils/localization";
-import { exportHistorySummaryToCSV } from "../utils/csvExport";
+import { getCurrencySymbol, formatCurrencyAmount, convertInrToCurrency } from "../utils/localization";
+import { exportHistorySummaryToCSV, exportHistoryItemizedToCSV } from "../utils/csvExport";
 import { calculateDueDate, getDaysUntilDue, parseDateString } from "../utils/dateUtils";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -40,6 +40,7 @@ interface DashboardProps {
   suppliers: SavedSupplier[];
   industry?: string;
   letterhead?: string;
+  currency?: string;
   onNavigate: (step: "dashboard" | "invoice" | "customers" | "suppliers" | "profile") => void;
   onOpenDocument: (doc: DocumentHistoryItem) => void;
   onDownloadPDF: (doc: DocumentHistoryItem) => void;
@@ -58,10 +59,39 @@ const getInvoiceDueDate = (doc: DocumentHistoryItem): { dueDate: Date; isExplici
   return { dueDate, isExplicit: Boolean(terms) };
 };
 
+const getDocTypeStyle = (type: string) => {
+  switch (type) {
+    case DocumentType.TAX_INVOICE:
+    case "Tax Invoice":
+      return "bg-emerald-100 text-emerald-700";
+    case DocumentType.PACKING_LIST:
+    case "Packing List":
+      return "bg-blue-100 text-blue-700";
+    case DocumentType.DELIVERY_CHALLAN:
+    case "Delivery Challan":
+      return "bg-purple-100 text-purple-700";
+    case DocumentType.QUOTATION:
+    case "Quotation":
+      return "bg-cyan-100 text-cyan-700";
+    case DocumentType.PURCHASE_ORDER:
+    case "Purchase Order":
+      return "bg-orange-100 text-orange-700";
+    case DocumentType.PROFORMA_INVOICE:
+    case "Proforma Invoice":
+      return "bg-indigo-100 text-indigo-700";
+    case DocumentType.COST_SHEET:
+    case "Cost Sheet":
+      return "bg-amber-100 text-amber-700";
+    default:
+      return "bg-zinc-100 text-zinc-700";
+  }
+};
+
 export const Dashboard = ({ 
   history, 
   customers, 
   suppliers, 
+  currency = "INR",
   onNavigate, 
   onOpenDocument, 
   onDownloadPDF, 
@@ -70,20 +100,40 @@ export const Dashboard = ({
   onViewAll,
   onUpdatePaymentStatus
 }: DashboardProps) => {
+  const activeCurrency = (currency || "INR").trim().toUpperCase();
   const customerCount = useMemo(() => customers.length, [customers]);
   const supplierCount = useMemo(() => suppliers.length, [suppliers]);
   
+  const getDocAmountInActiveCurrency = (doc: DocumentHistoryItem) => {
+    const docCurrency = (doc.currency || "INR").trim().toUpperCase();
+    if (docCurrency === activeCurrency) {
+      return Number(doc.total || doc.totalAmount || 0);
+    }
+    // If doc was created in INR or other currency, convert to active currency
+    const inrValue = doc.inrTotal || (docCurrency === "INR" ? (doc.total || doc.totalAmount || 0) : 0);
+    if (inrValue) {
+      return convertInrToCurrency(inrValue, activeCurrency);
+    }
+    return Number(doc.total || doc.totalAmount || 0);
+  };
+
   const totalSales = useMemo(() => history
     .filter(h => h.type === DocumentType.TAX_INVOICE)
-    .reduce((acc, curr) => acc + (curr.inrTotal || curr.total), 0), [history]);
+    .reduce((acc, curr) => acc + getDocAmountInActiveCurrency(curr), 0), [history, activeCurrency]);
     
   const totalPurchases = useMemo(() => history
     .filter(h => h.type === DocumentType.PURCHASE_ORDER)
-    .reduce((acc, curr) => acc + (curr.inrTotal || curr.total), 0), [history]);
+    .reduce((acc, curr) => acc + getDocAmountInActiveCurrency(curr), 0), [history, activeCurrency]);
 
-  const recentDocs = useMemo(() => [...history]
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, 10), [history]);
+  const recentDocs = useMemo(() => {
+    return [...history]
+      .sort((a, b) => {
+        const tA = typeof a.timestamp === "number" ? a.timestamp : (a.timestamp ? new Date(a.timestamp).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0));
+        const tB = typeof b.timestamp === "number" ? b.timestamp : (b.timestamp ? new Date(b.timestamp).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0));
+        return tB - tA;
+      })
+      .slice(0, 10);
+  }, [history]);
 
   // Process all Tax Invoices for payment & due date scanning
   const scannedInvoices = useMemo(() => {
@@ -107,13 +157,13 @@ export const Dashboard = ({
         status = "pending";
       }
 
-      const formattedDueDate = dueDate.toLocaleDateString("en-IN", {
+      const formattedDueDate = dueDate.toLocaleDateString(activeCurrency === "INR" ? "en-IN" : "en-US", {
         day: "2-digit",
         month: "short",
         year: "numeric",
       });
 
-      const formattedIssueDate = parseDateString(doc.date, doc.timestamp).toLocaleDateString("en-IN", {
+      const formattedIssueDate = parseDateString(doc.date, doc.timestamp).toLocaleDateString(activeCurrency === "INR" ? "en-IN" : "en-US", {
         day: "2-digit",
         month: "short",
         year: "numeric",
@@ -129,7 +179,7 @@ export const Dashboard = ({
         isExplicitDueDate: isExplicit,
       };
     });
-  }, [history]);
+  }, [history, activeCurrency]);
 
   // Aggregate metrics for payments
   const paymentMetrics = useMemo(() => {
@@ -143,7 +193,7 @@ export const Dashboard = ({
     let paidCount = 0;
 
     scannedInvoices.forEach((inv) => {
-      const amount = inv.inrTotal || inv.total;
+      const amount = getDocAmountInActiveCurrency(inv);
       if (inv.status === "paid") {
         totalPaid += amount;
         paidCount++;
@@ -170,14 +220,30 @@ export const Dashboard = ({
       totalPaid,
       paidCount,
     };
-  }, [scannedInvoices]);
+  }, [scannedInvoices, activeCurrency]);
 
   const stats = useMemo(() => [
-    { label: "Total Sales", value: `₹${totalSales.toLocaleString('en-IN')}`, icon: TrendingUp, color: "bg-emerald-500", lightColor: "bg-emerald-50", textColor: "text-emerald-600", action: onViewAll },
-    { label: "Total Purchases", value: `₹${totalPurchases.toLocaleString('en-IN')}`, icon: Truck, color: "bg-amber-500", lightColor: "bg-amber-50", textColor: "text-amber-600", action: onViewAll },
+    { 
+      label: "Total Sales", 
+      value: formatCurrencyAmount(totalSales, activeCurrency, { minimumFractionDigits: 0, maximumFractionDigits: 2 }), 
+      icon: TrendingUp, 
+      color: "bg-emerald-500", 
+      lightColor: "bg-emerald-50", 
+      textColor: "text-emerald-600", 
+      action: onViewAll 
+    },
+    { 
+      label: "Total Purchases", 
+      value: formatCurrencyAmount(totalPurchases, activeCurrency, { minimumFractionDigits: 0, maximumFractionDigits: 2 }), 
+      icon: Truck, 
+      color: "bg-amber-500", 
+      lightColor: "bg-amber-50", 
+      textColor: "text-amber-600", 
+      action: onViewAll 
+    },
     { label: "Saved Clients", value: customerCount, icon: Users, color: "bg-indigo-500", lightColor: "bg-indigo-50", textColor: "text-indigo-600", action: () => onNavigate("customers") },
     { label: "Saved Suppliers", value: supplierCount, icon: Truck, color: "bg-purple-500", lightColor: "bg-purple-50", textColor: "text-purple-600", action: () => onNavigate("suppliers") },
-  ], [totalSales, totalPurchases, customerCount, supplierCount, onViewAll, onNavigate]);
+  ], [totalSales, totalPurchases, customerCount, supplierCount, activeCurrency, onViewAll, onNavigate]);
 
   return (
     <div className="space-y-8">
@@ -249,7 +315,7 @@ export const Dashboard = ({
             <div>
               <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Total Unpaid</p>
               <p className="text-2xl sm:text-3xl font-black text-zinc-900 tracking-tight">
-                ₹{paymentMetrics.totalPending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {formatCurrencyAmount(paymentMetrics.totalPending, activeCurrency, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
             </div>
           </CardContent>
@@ -272,7 +338,7 @@ export const Dashboard = ({
             <div>
               <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Overdue Amount</p>
               <p className="text-2xl sm:text-3xl font-black text-rose-700 tracking-tight">
-                ₹{paymentMetrics.totalOverdue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {formatCurrencyAmount(paymentMetrics.totalOverdue, activeCurrency, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
             </div>
           </CardContent>
@@ -295,7 +361,7 @@ export const Dashboard = ({
             <div>
               <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Due Soon Amount</p>
               <p className="text-2xl sm:text-3xl font-black text-amber-800 tracking-tight">
-                ₹{paymentMetrics.totalApproaching.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {formatCurrencyAmount(paymentMetrics.totalApproaching, activeCurrency, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
             </div>
           </CardContent>
@@ -316,16 +382,28 @@ export const Dashboard = ({
               action={
                 <div className="flex items-center gap-2">
                   {history.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => exportHistorySummaryToCSV(history)}
-                      className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 font-bold"
-                      title="Export invoice history as CSV"
-                    >
-                      <FileSpreadsheet className="h-4 w-4 mr-1.5" />
-                      Export CSV
-                    </Button>
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => exportHistorySummaryToCSV(history)}
+                        className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 font-bold"
+                        title="Export document summary CSV"
+                      >
+                        <FileSpreadsheet className="h-4 w-4 mr-1.5" />
+                        Export CSV
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => exportHistoryItemizedToCSV(history)}
+                        className="text-emerald-700 border-emerald-200 hover:bg-emerald-50 font-bold"
+                        title="Export detailed line-items with HSN & item details to CSV / Excel"
+                      >
+                        <FileSpreadsheet className="h-4 w-4 mr-1.5" />
+                        Export Items (CSV)
+                      </Button>
+                    </>
                   )}
                   {history.length > 5 && (
                     <Button 
@@ -373,12 +451,22 @@ export const Dashboard = ({
                         >
                           <td className="px-8 py-5 align-middle">
                             <div className="flex items-center gap-4">
-                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${doc.type === "Purchase Order" ? "bg-orange-100 text-orange-600" : "bg-emerald-100 text-emerald-600"}`}>
+                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${getDocTypeStyle(doc.type)}`}>
                                 <FileText className="h-5 w-5" />
                               </div>
-                              <div>
-                                <p className="text-sm font-extrabold text-zinc-900 group-hover:text-brand-600 transition-colors">{doc.id}</p>
-                                <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">{doc.type}</p>
+                              <div className="min-w-0">
+                                <div className="flex flex-row items-center gap-2 flex-wrap">
+                                  <p className="text-sm font-extrabold text-zinc-900 group-hover:text-brand-600 transition-colors">{doc.id}</p>
+                                  {doc.editCount !== undefined && doc.editCount > 0 && (
+                                    <span 
+                                      className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap inline-flex items-center shrink-0"
+                                      title={`Edited ${doc.editCount} time(s)`}
+                                    >
+                                      {doc.editCount} {doc.editCount === 1 ? 'Edit' : 'Edits'}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mt-1">{doc.type}</p>
                               </div>
                             </div>
                           </td>
@@ -391,8 +479,7 @@ export const Dashboard = ({
                           <td className="px-8 py-5 text-right align-middle">
                             <div className="flex items-center justify-end gap-3">
                               <p className="text-sm font-black text-zinc-900">
-                                {getCurrencySymbol(doc.currency || 'INR')}
-                                {doc.total.toLocaleString(doc.currency === 'INR' || !doc.currency ? 'en-IN' : 'en-US', { minimumFractionDigits: 2 })}
+                                {formatCurrencyAmount(doc.total, doc.currency || 'INR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </p>
                               <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                                 <Button 
@@ -465,18 +552,27 @@ export const Dashboard = ({
                       onClick={() => onOpenDocument(doc)}
                     >
                       <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${doc.type === "Purchase Order" ? "bg-orange-100 text-orange-600" : "bg-emerald-100 text-emerald-600"}`}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${getDocTypeStyle(doc.type)}`}>
                             <FileText className="h-5 w-5" />
                           </div>
-                          <div>
-                            <p className="text-sm font-extrabold text-zinc-900">{doc.id}</p>
-                            <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">{doc.type}</p>
+                          <div className="min-w-0">
+                            <div className="flex flex-row items-center gap-2 flex-wrap">
+                              <p className="text-sm font-extrabold text-zinc-900">{doc.id}</p>
+                              {doc.editCount !== undefined && doc.editCount > 0 && (
+                                <span 
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap inline-flex items-center shrink-0"
+                                  title={`Edited ${doc.editCount} time(s)`}
+                                >
+                                  {doc.editCount} {doc.editCount === 1 ? 'Edit' : 'Edits'}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mt-1">{doc.type}</p>
                           </div>
                         </div>
-                        <p className="text-sm font-black text-zinc-900">
-                          {getCurrencySymbol(doc.currency || 'INR')}
-                          {doc.total.toLocaleString(doc.currency === 'INR' || !doc.currency ? 'en-IN' : 'en-US')}
+                        <p className="text-sm font-black text-zinc-900 shrink-0">
+                          {formatCurrencyAmount(doc.total, doc.currency || 'INR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </p>
                       </div>
                       
@@ -588,7 +684,20 @@ export const Dashboard = ({
               >
                 <div className="flex items-center gap-4">
                   <FileSpreadsheet className="h-5 w-5 text-emerald-600" />
-                  <span className="font-bold">Export History (CSV)</span>
+                  <span className="font-bold">Export History Summary (CSV)</span>
+                </div>
+                <FileSpreadsheet className="h-4 w-4 text-emerald-500" />
+              </Button>
+
+              <Button 
+                variant="outline"
+                disabled={history.length === 0}
+                onClick={() => exportHistoryItemizedToCSV(history)}
+                className="w-full justify-between h-14 border-emerald-200 hover:bg-emerald-50 text-emerald-900"
+              >
+                <div className="flex items-center gap-4">
+                  <FileSpreadsheet className="h-5 w-5 text-emerald-600" />
+                  <span className="font-bold">Export Line Items (CSV)</span>
                 </div>
                 <FileSpreadsheet className="h-4 w-4 text-emerald-500" />
               </Button>

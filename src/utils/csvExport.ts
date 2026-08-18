@@ -187,6 +187,67 @@ export const exportHistoryItemizedToCSV = (
 };
 
 /**
+ * Export active document line items to CSV.
+ * Opens directly in Microsoft Excel / Google Sheets with UTF-8 BOM encoding.
+ */
+export const exportCurrentDocumentItemsToCSV = (
+  items: any[],
+  docDetails: { docId?: string; docType?: string; date?: string; customerName?: string; currency?: string } = {},
+  filenamePrefix: string = "line_items"
+) => {
+  if (!items || items.length === 0) return;
+
+  const headers = [
+    "Item #",
+    "Description",
+    "HSN / SAC",
+    "Quantity",
+    "Unit",
+    "Rate",
+    "Currency",
+    "Line Subtotal",
+    "Tax Rate (%)",
+    "Tax Amount",
+    "Line Total",
+    "Heat / Lot No",
+    "Document ID",
+    "Document Date",
+    "Customer Name"
+  ];
+
+  const rows = items.map((line, idx) => {
+    const qty = Number(line.quantity) || 0;
+    const rate = Number(line.rate) || 0;
+    const taxPct = Number(line.taxRate) || 0;
+    const lineSubtotal = qty * rate;
+    const lineTax = lineSubtotal * (taxPct / 100);
+    const lineTotal = lineSubtotal + lineTax;
+
+    return [
+      idx + 1,
+      escapeCSV(line.description || ""),
+      escapeCSV(line.hsn || ""),
+      qty,
+      escapeCSV(line.unit || "NOS"),
+      rate.toFixed(2),
+      escapeCSV(docDetails.currency || "INR"),
+      lineSubtotal.toFixed(2),
+      `${taxPct}%`,
+      lineTax.toFixed(2),
+      lineTotal.toFixed(2),
+      escapeCSV(line.heatNo || ""),
+      escapeCSV(docDetails.docId || ""),
+      escapeCSV(docDetails.date || ""),
+      escapeCSV(docDetails.customerName || "")
+    ].join(",");
+  });
+
+  const csvContent = [headers.join(","), ...rows].join("\n");
+  const cleanId = (docDetails.docId || "doc").replace(/[^a-zA-Z0-9_-]/g, "_");
+  downloadCSV(csvContent, `${filenamePrefix}_${cleanId}_${new Date().toISOString().slice(0, 10)}.csv`);
+};
+
+/**
  * Helper to initiate browser download of CSV string
  */
 const downloadCSV = (csvContent: string, fileName: string) => {

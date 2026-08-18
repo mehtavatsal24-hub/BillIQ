@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { ExtractionStepShowcase } from './ExtractionStepShowcase';
 import { BatchEditorShowcase } from './BatchEditorShowcase';
 import { Logo } from './Logo';
-import { openSupportModal } from './ContactSupportModal';
+import { ContactSupportModal, openSupportModal } from './ContactSupportModal';
+import { HelpCenterModal, openHelpCenter } from './HelpCenterModal';
+import { HowToUseModal } from './HowToUseModal';
 import { PrivacyPolicy } from './PrivacyPolicy';
 import { TermsAndConditions } from './TermsAndConditions';
 import { CookiePolicy } from './CookiePolicy';
@@ -216,6 +218,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   userEmail
 }) => {
   const [activePolicyModal, setActivePolicyModal] = useState<'privacy' | 'terms' | 'cookie' | null>(null);
+  const [isHelpCenterOpen, setIsHelpCenterOpen] = useState<boolean>(false);
+  const [isHowToUseOpen, setIsHowToUseOpen] = useState<boolean>(false);
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
   const [heroTab, setHeroTab] = useState<'billing' | 'compliance'>('billing');
   const [selectedCurrency, setSelectedCurrency] = useState<'USD' | 'EUR' | 'GBP' | 'INR' | 'AED'>('USD');
@@ -223,6 +227,28 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   // Simulated live active users counter for hero preview
   const [liveUserCount, setLiveUserCount] = useState<number>(14);
+
+  // Global Keyboard Shortcut: Cmd+K / Ctrl+K opens Help Center
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsHelpCenterOpen(prev => !prev);
+      }
+    };
+
+    const handleOpenHelpCenter = () => {
+      setIsHelpCenterOpen(true);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('billiq-open-help-center', handleOpenHelpCenter);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('billiq-open-help-center', handleOpenHelpCenter);
+    };
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -1397,7 +1423,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <li>
                   <button 
                     type="button"
-                    onClick={(e) => { e.preventDefault(); scrollToSection('features'); }} 
+                    onClick={(e) => { e.preventDefault(); setIsHowToUseOpen(true); }} 
                     className="hover:text-blue-600 transition-colors cursor-pointer text-left"
                   >
                     Documentation / User Guide
@@ -1406,7 +1432,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <li>
                   <button 
                     type="button"
-                    onClick={(e) => { e.preventDefault(); openSupportModal({ subject: 'Landing Page Help Center Inquiry' }); }} 
+                    onClick={(e) => { e.preventDefault(); setIsHelpCenterOpen(true); }} 
                     className="hover:text-blue-600 transition-colors cursor-pointer text-left inline-flex items-center gap-1.5"
                   >
                     <span>Help Center</span>
@@ -1431,18 +1457,28 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <p className="text-slate-600 leading-relaxed font-normal">
                 Our global compliance & technical support team is available to assist with your custom billing, tax schemas, and enterprise needs.
               </p>
-              <div className="pt-1 flex items-center gap-2">
-                <Mail className="w-4 h-4 text-blue-600 shrink-0" />
-                <button 
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    openSupportModal({ subject: 'Landing Page Direct Contact Inquiry' });
-                  }}
-                  className="text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline select-all cursor-pointer"
-                >
-                  support@billiq.site
-                </button>
+              <div className="pt-1 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Mail className="w-4 h-4 text-blue-600 shrink-0" />
+                  <a 
+                    href="mailto:support@billiq.site?subject=BillIQ%20Support%20Inquiry"
+                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer"
+                  >
+                    support@billiq.site
+                  </a>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      openSupportModal({ subject: 'Landing Page Direct Support Inquiry' });
+                    }}
+                    className="text-[11px] font-medium text-slate-500 hover:text-blue-600 underline transition-colors cursor-pointer text-left"
+                  >
+                    Or open in-app support modal
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1496,6 +1532,30 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
         </div>
       </footer>
+
+      {/* Help Center & Command Palette Modal */}
+      <HelpCenterModal
+        isOpen={isHelpCenterOpen}
+        onClose={() => setIsHelpCenterOpen(false)}
+        onOpenHowToUse={() => {
+          setIsHelpCenterOpen(false);
+          setIsHowToUseOpen(true);
+        }}
+        onEnterDemo={onEnterDemo}
+        onSignUp={onSignUp}
+      />
+
+      {/* Step-by-Step How-To-Use Guide Modal */}
+      <HowToUseModal
+        isOpen={isHowToUseOpen}
+        onClose={() => setIsHowToUseOpen(false)}
+        onStartInvoice={onEnterDemo}
+      />
+
+      {/* Contact Support Modal */}
+      <ContactSupportModal
+        userEmail={userEmail}
+      />
 
       {/* Legal Document View Modal */}
       {activePolicyModal && (

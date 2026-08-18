@@ -125,7 +125,7 @@ export const EmailVerificationScreen: React.FC<EmailVerificationScreenProps> = (
         }
         onVerified();
       } else {
-        setError("Firebase hasn't registered your link click yet. If you already clicked the link, please wait a moment or enter the 6-digit verification code below.");
+        setError("Verification is still pending. If you already clicked the link in your email, please wait a moment or enter the 6-digit verification code below.");
       }
     } catch (err: any) {
       console.error("Error checking status:", err);

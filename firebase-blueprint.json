@@ -142,6 +142,51 @@
         "status": { "type": "string", "enum": ["active", "resolved"] },
         "occurrenceCount": { "type": "number" }
       }
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "Customer or Supplier contact record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner user ID" },
+        "name": { "type": "string", "description": "Contact name" },
+        "type": { "type": "string", "enum": ["Customer", "Supplier"] },
+        "gstin": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" }
+      }
+    },
+    "ApiUsageLog": {
+      "title": "ApiUsageLog",
+      "description": "Live AI and API usage audit with token breakdown and cost calculation in INR",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "actionType": { "type": "string" },
+        "model": { "type": "string" },
+        "promptTokens": { "type": "number" },
+        "candidatesTokens": { "type": "number" },
+        "totalTokens": { "type": "number" },
+        "costInr": { "type": "number" },
+        "status": { "type": "string", "enum": ["success", "failed", "rate_limited"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "executionTimeMs": { "type": "number" },
+        "errorMessage": { "type": "string" }
+      }
+    },
+    "Presence": {
+      "title": "Presence",
+      "description": "Real-time user heartbeat and presence status",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "isOnline": { "type": "boolean" },
+        "lastActiveAt": { "type": "string", "format": "date-time" },
+        "currentRoute": { "type": "string" }
+      }
     }
   },
   "firestore": {
@@ -156,6 +201,18 @@
     "/errorLogs/{logId}": {
       "schema": "ErrorLog",
       "description": "Real-time application health incident logs"
+    },
+    "/contacts/{contactId}": {
+      "schema": "Contact",
+      "description": "Customer and supplier directory records"
+    },
+    "/api_usage_logs/{logId}": {
+      "schema": "ApiUsageLog",
+      "description": "API spend logs with token counts and INR conversion"
+    },
+    "/presence/{userId}": {
+      "schema": "Presence",
+      "description": "User real-time presence heartbeat records"
     }
   }
 }

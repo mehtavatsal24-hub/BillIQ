@@ -131,7 +131,7 @@ export function exportLandedCostSheetToExcel(options: ExportLandedCostSheetOptio
     });
 
     const totalLandedCost = computedRows.reduce((a, b) => a + b, 0);
-    const profitAmount = sup.profitType === "%" ? (prodCostTotal * (sup.profitValue || 0)) / 100 : (sup.profitValue || 0);
+    const profitAmount = sup.profitType === "%" ? (totalLandedCost * (sup.profitValue || 0)) / 100 : (sup.profitValue || 0);
     const discountAmount = sup.discountType === "%" ? (prodCostTotal * (sup.discountValue || 0)) / 100 : (sup.discountValue || 0);
     const finalPrice = Math.max(0, totalLandedCost + profitAmount - discountAmount);
 
@@ -344,23 +344,31 @@ export function exportLandedCostSheetToExcel(options: ExportLandedCostSheetOptio
   suppliers.forEach((sup, sIdx) => {
     const colLetter = String.fromCharCode(69 + sIdx);
     const cellRef = `${colLetter}${profitRow}`;
-    const prodCell = `${colLetter}${prodCostTotalRow}`;
+    const landedCell = `${colLetter}${landedCostRow}`;
 
     let formula = "";
     const prodCostVal = activeRows
       .filter((p, pIdx) => p.categoryKey === "product" || pIdx === 0)
       .reduce((acc, p) => acc + getRowAmount(p, sup.id), 0) || 0;
+
+    const landedVal = activeRows.reduce((acc, r) => {
+      if (r.type === "%") return acc + (prodCostVal * getRowTypeValue(r, sup.id)) / 100;
+      if (r.type === "Per Unit") return acc + (getRowTypeValue(r, sup.id) * totalQuantity);
+      if (r.type === "By Weight") return acc + (getRowTypeValue(r, sup.id) * totalWeight);
+      return acc + getRowAmount(r, sup.id);
+    }, 0);
+
     let profitVal = 0;
 
     if (sup.profitType === "%") {
       const pct = sup.profitValue || 0;
-      formula = `${prodCell}*${pct}/100`;
-      profitVal = (prodCostVal * pct) / 100;
+      formula = `${landedCell}*${pct}/100`;
+      profitVal = (landedVal * pct) / 100;
     } else {
       profitVal = sup.profitValue || 0;
     }
 
-    setCell(`D${profitRow}`, `Profit Markup (${sup.profitType === "%" ? sup.profitValue + "% on Base Cost" : currencySymbol + sup.profitValue + " Flat"})`, "s");
+    setCell(`D${profitRow}`, `Profit Markup (${sup.profitType === "%" ? sup.profitValue + "% on Landed Cost" : currencySymbol + sup.profitValue + " Flat"})`, "s");
     setCell(cellRef, profitVal, "n", formula || undefined, numFmt);
   });
 
@@ -389,7 +397,7 @@ export function exportLandedCostSheetToExcel(options: ExportLandedCostSheetOptio
       return acc + getRowAmount(r, sup.id);
     }, 0);
 
-    const profitVal = sup.profitType === "%" ? (prodCostVal * (sup.profitValue || 0)) / 100 : (sup.profitValue || 0);
+    const profitVal = sup.profitType === "%" ? (landedVal * (sup.profitValue || 0)) / 100 : (sup.profitValue || 0);
 
     setCell(cellRef, landedVal + profitVal, "n", formula, numFmt);
   });
@@ -448,7 +456,7 @@ export function exportLandedCostSheetToExcel(options: ExportLandedCostSheetOptio
       return acc + getRowAmount(r, sup.id);
     }, 0);
 
-    const profitVal = sup.profitType === "%" ? (prodCostVal * (sup.profitValue || 0)) / 100 : (sup.profitValue || 0);
+    const profitVal = sup.profitType === "%" ? (landedVal * (sup.profitValue || 0)) / 100 : (sup.profitValue || 0);
     const discVal = sup.discountType === "%" ? (prodCostVal * (sup.discountValue || 0)) / 100 : (sup.discountValue || 0);
     const finalVal = Math.max(0, landedVal + profitVal - discVal);
 
@@ -479,7 +487,7 @@ export function exportLandedCostSheetToExcel(options: ExportLandedCostSheetOptio
       return acc + getRowAmount(r, sup.id);
     }, 0);
 
-    const profitVal = sup.profitType === "%" ? (prodCostVal * (sup.profitValue || 0)) / 100 : (sup.profitValue || 0);
+    const profitVal = sup.profitType === "%" ? (landedVal * (sup.profitValue || 0)) / 100 : (sup.profitValue || 0);
     const discVal = sup.discountType === "%" ? (prodCostVal * (sup.discountValue || 0)) / 100 : (sup.discountValue || 0);
     const finalVal = Math.max(0, landedVal + profitVal - discVal);
     const finalPerUnit = finalVal / (totalQuantity || 1);

@@ -17,7 +17,7 @@ import { Card, CardHeader, CardContent } from "./Card";
 import { Button } from "./Button";
 import { DocumentHistoryItem, DocumentType } from "../types";
 import { CURRENCY_SYMBOLS } from "../constants";
-import { getCurrencySymbol, getCountryConfig } from "../utils/localization";
+import { getCurrencySymbol, getCountryConfig, formatCurrencyAmount } from "../utils/localization";
 import { exportHistorySummaryToCSV, exportHistoryItemizedToCSV } from "../utils/csvExport";
 import { exportInvoiceDataToLandedCostExcel } from "../services/excelService";
 
@@ -29,6 +29,34 @@ interface HistoryListProps {
   onUpdatePaymentStatus?: (timestamp: number, status: "pending" | "paid" | "overdue" | "due_soon") => void;
   onBack: () => void;
 }
+
+const getDocTypeStyle = (type: string) => {
+  switch (type) {
+    case DocumentType.TAX_INVOICE:
+    case "Tax Invoice":
+      return "bg-emerald-50 text-emerald-600";
+    case DocumentType.PACKING_LIST:
+    case "Packing List":
+      return "bg-blue-50 text-blue-600";
+    case DocumentType.DELIVERY_CHALLAN:
+    case "Delivery Challan":
+      return "bg-purple-50 text-purple-600";
+    case DocumentType.QUOTATION:
+    case "Quotation":
+      return "bg-cyan-50 text-cyan-600";
+    case DocumentType.PURCHASE_ORDER:
+    case "Purchase Order":
+      return "bg-orange-50 text-orange-600";
+    case DocumentType.PROFORMA_INVOICE:
+    case "Proforma Invoice":
+      return "bg-indigo-50 text-indigo-600";
+    case DocumentType.COST_SHEET:
+    case "Cost Sheet":
+      return "bg-amber-50 text-amber-600";
+    default:
+      return "bg-zinc-50 text-zinc-600";
+  }
+};
 
 export const HistoryList = ({ history, onOpenDocument, onDownloadPDF, onDeleteDocument, onUpdatePaymentStatus, onBack }: HistoryListProps) => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -43,7 +71,11 @@ export const HistoryList = ({ history, onOpenDocument, onDownloadPDF, onDeleteDo
       const matchesType = filterType === "All" || doc.type === filterType;
       return matchesSearch && matchesType;
     })
-    .sort((a, b) => b.timestamp - a.timestamp);
+    .sort((a, b) => {
+      const tA = typeof a.timestamp === "number" ? a.timestamp : (a.timestamp ? new Date(a.timestamp).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0));
+      const tB = typeof b.timestamp === "number" ? b.timestamp : (b.timestamp ? new Date(b.timestamp).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0));
+      return tB - tA;
+    });
 
   const documentTypes = ["All", ...Object.values(DocumentType)];
 
@@ -84,7 +116,7 @@ export const HistoryList = ({ history, onOpenDocument, onDownloadPDF, onDeleteDo
             disabled={filteredHistory.length === 0}
             onClick={() => exportHistoryItemizedToCSV(filteredHistory)}
             className="flex items-center gap-2 font-semibold text-zinc-700 hover:text-zinc-900 border-zinc-200 bg-white hover:bg-zinc-50"
-            title="Export detailed line-item level CSV with HSN & item specs"
+            title="Export detailed line-item level CSV with HSN & item details"
           >
             <Table className="h-4 w-4 text-blue-600" />
             <span>Export CSV (Itemized)</span>
@@ -145,25 +177,22 @@ export const HistoryList = ({ history, onOpenDocument, onDownloadPDF, onDeleteDo
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
-                          <div className={`w-8 h-8 rounded flex items-center justify-center ${
-                            doc.type === DocumentType.PURCHASE_ORDER ? "bg-orange-50 text-orange-600" : 
-                            "bg-emerald-50 text-emerald-600"
-                          }`}>
+                          <div className={`w-8 h-8 rounded flex items-center justify-center shrink-0 ${getDocTypeStyle(doc.type)}`}>
                             <FileText className="h-4 w-4" />
                           </div>
-                          <div>
-                            <div className="flex items-center gap-1.5">
+                          <div className="min-w-0">
+                            <div className="flex flex-row items-center gap-2 flex-wrap">
                               <p className="text-sm font-bold text-zinc-900">{doc.id}</p>
                               {doc.editCount !== undefined && doc.editCount > 0 && (
                                 <span 
-                                  className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap inline-flex items-center shrink-0"
                                   title={`Edited ${doc.editCount} time(s)`}
                                 >
                                   {doc.editCount} {doc.editCount === 1 ? 'Edit' : 'Edits'}
                                 </span>
                               )}
                             </div>
-                            <p className="text-[10px] text-zinc-500 uppercase font-semibold">{doc.type}</p>
+                            <p className="text-[10px] text-zinc-500 uppercase font-semibold mt-1">{doc.type}</p>
                           </div>
                         </div>
                       </td>
@@ -189,8 +218,7 @@ export const HistoryList = ({ history, onOpenDocument, onDownloadPDF, onDeleteDo
                       </td>
                       <td className="px-6 py-4 text-right">
                         <p className="text-sm font-bold text-zinc-900">
-                          {getCurrencySymbol(doc.currency || 'INR')}
-                          {doc.total.toLocaleString(doc.currency === 'INR' || !doc.currency ? 'en-IN' : 'en-US', { minimumFractionDigits: 2 })}
+                          {formatCurrencyAmount(doc.total, doc.currency || 'INR')}
                         </p>
                       </td>
                       <td className="px-6 py-4 text-right">
@@ -271,7 +299,7 @@ export const HistoryList = ({ history, onOpenDocument, onDownloadPDF, onDeleteDo
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={5} className="px-6 py-12 text-center">
+                    <td colSpan={6} className="px-6 py-12 text-center">
                       <div className="flex flex-col items-center gap-2 text-zinc-400">
                         <FileText className="h-8 w-8 opacity-20" />
                         <p className="text-sm font-medium">No documents found matching your search</p>

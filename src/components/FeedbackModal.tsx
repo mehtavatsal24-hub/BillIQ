@@ -14,6 +14,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
   userId,
   onSubmitSuccess,
 }) => {
+  const [submittedEmail, setSubmittedEmail] = useState(userEmail || "");
   const [q1TimeSaved, setQ1TimeSaved] = useState("Saved 15-30 mins");
   const [q2BetterSoftware, setQ2BetterSoftware] = useState("Much Better");
   const [q3LikedConcept, setQ3LikedConcept] = useState("Loved it!");
@@ -22,6 +23,13 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
   
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Sync state if prop changes
+  React.useEffect(() => {
+    if (userEmail && !submittedEmail) {
+      setSubmittedEmail(userEmail);
+    }
+  }, [userEmail]);
 
   if (!isOpen) return null;
 
@@ -35,9 +43,11 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     setError("");
     setIsSubmitting(true);
 
+    const activeUserEmail = submittedEmail.trim() || userEmail || "Anonymous";
+
     const payload = {
       userId: userId || "Guest User",
-      userEmail: userEmail || "Anonymous",
+      userEmail: activeUserEmail,
       q1_timeSaved: q1TimeSaved,
       q2_betterSoftware: q2BetterSoftware,
       q3_likedConcept: q3LikedConcept,
@@ -90,6 +100,20 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
               <span>{error}</span>
             </div>
           )}
+
+          {/* Email Address */}
+          <div>
+            <label className="block text-xs font-bold text-zinc-800 mb-1.5 flex items-center justify-between">
+              <span>Your Email Address <span className="text-zinc-500 font-normal">(for direct response)</span></span>
+            </label>
+            <input
+              type="email"
+              value={submittedEmail}
+              onChange={(e) => setSubmittedEmail(e.target.value)}
+              placeholder="e.g., name@company.com"
+              className="w-full p-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-sm font-semibold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
 
           {/* Question 1 */}
           <div>

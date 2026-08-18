@@ -1,4 +1,4 @@
-import { sendFeedbackRequestEmails, sendInactivityReminders, sendBroadcastEmail, EmailTriggerResult } from "./emailService";
+import { sendFeedbackRequestEmails, sendInactivityReminders, sendBroadcastEmail, EmailTriggerResult, isDeliverableEmail } from "./emailService";
 
 export interface UserEmailRecord {
   id?: string;
@@ -7,23 +7,28 @@ export interface UserEmailRecord {
   name?: string;
   createdAt?: string;
   lastActive?: string;
+  lastActiveAt?: string;
+  lastLoginAt?: string;
+  documentsCount?: number;
+  firstDocCreatedAt?: string | null;
+  hasReceivedFirstDocFollowup?: boolean;
   hasReceivedRatingEmail?: boolean;
+  hasReceivedInactivityReminder?: boolean;
 }
 
 /**
- * Trigger 2-Day Post Signup Founder Feedback Requests
- * Ensures dynamic recipient binding to user.email and skips missing/invalid email addresses.
- * Sender: Vatsal from BillIQ <support@billiq.site>
+ * Trigger 1st Document Creation Follow-Up / Founder Feedback Requests
+ * Sender: Founder from BillIQ <support@billiq.site>
  */
-export async function trigger2DayFeedbackRequests(users?: UserEmailRecord[]): Promise<EmailTriggerResult> {
+export async function triggerFirstDocFollowupRequests(users?: UserEmailRecord[]): Promise<EmailTriggerResult> {
   if (users) {
     const validUsers: UserEmailRecord[] = [];
     for (const user of users) {
-      if (!user.email || !user.email.includes('@')) continue;
+      if (!user.email || !isDeliverableEmail(user.email)) continue;
       validUsers.push(user);
     }
     try {
-      const res = await fetch("/api/send-feedback-requests", {
+      const res = await fetch("/api/send-first-doc-followup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ users: validUsers }),
@@ -33,16 +38,16 @@ export async function trigger2DayFeedbackRequests(users?: UserEmailRecord[]): Pr
         success: data.success ?? res.ok,
         count: data.count || 0,
         recipients: data.recipients || [],
-        message: data.message || `Dispatched 2-day feedback requests to ${data.count || 0} user(s).`,
+        message: data.message || `Dispatched 1st document follow-ups to ${data.count || 0} user(s).`,
         details: data.details,
       };
     } catch (err: any) {
-      console.error("Error triggering 2-day feedback request emails:", err);
+      console.error("Error triggering 1st document follow-up emails:", err);
       return {
         success: false,
         count: 0,
         recipients: [],
-        message: err?.message || "Failed to trigger 2-day feedback request emails.",
+        message: err?.message || "Failed to trigger 1st document follow-up emails.",
       };
     }
   }
@@ -50,15 +55,14 @@ export async function trigger2DayFeedbackRequests(users?: UserEmailRecord[]): Pr
 }
 
 /**
- * Trigger 14-Day Inactivity Reminder Emails
- * Ensures dynamic recipient binding to user.email and skips missing/invalid email addresses.
- * Sender: Vatsal from BillIQ <support@billiq.site>
+ * Trigger 3-Day Inactivity Reminder Emails
+ * Sender: Founder from BillIQ <support@billiq.site>
  */
-export async function trigger14DayInactivityEmails(users?: UserEmailRecord[]): Promise<EmailTriggerResult> {
+export async function trigger3DayInactivityEmails(users?: UserEmailRecord[]): Promise<EmailTriggerResult> {
   if (users) {
     const validUsers: UserEmailRecord[] = [];
     for (const user of users) {
-      if (!user.email || !user.email.includes('@')) continue;
+      if (!user.email || !isDeliverableEmail(user.email)) continue;
       validUsers.push(user);
     }
     try {
@@ -72,20 +76,24 @@ export async function trigger14DayInactivityEmails(users?: UserEmailRecord[]): P
         success: data.success ?? res.ok,
         count: data.count || 0,
         recipients: data.recipients || [],
-        message: data.message || `Dispatched 14-day inactivity reminders to ${data.count || 0} user(s).`,
+        message: data.message || `Dispatched 3-day inactivity reminders to ${data.count || 0} user(s).`,
         details: data.details,
       };
     } catch (err: any) {
-      console.error("Error triggering 14-day inactivity emails:", err);
+      console.error("Error triggering 3-day inactivity emails:", err);
       return {
         success: false,
         count: 0,
         recipients: [],
-        message: err?.message || "Failed to trigger 14-day inactivity emails.",
+        message: err?.message || "Failed to trigger 3-day inactivity emails.",
       };
     }
   }
   return sendInactivityReminders();
 }
 
+export const trigger2DayFeedbackRequests = triggerFirstDocFollowupRequests;
+export const trigger14DayInactivityEmails = trigger3DayInactivityEmails;
+
 export { sendFeedbackRequestEmails, sendInactivityReminders, sendBroadcastEmail };
+

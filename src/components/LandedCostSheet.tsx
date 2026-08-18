@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2, Edit2, Check, RotateCcw, SlidersHorizontal, FileSpreadsheet, DollarSign, Calculator, Layers, Tag, Users, Award, AlertCircle, X, Package, Scale, Download, Wand2 } from "lucide-react";
+import { Plus, Trash2, Edit2, Check, RotateCcw, SlidersHorizontal, FileSpreadsheet, DollarSign, Calculator, Layers, Tag, Users, Award, AlertCircle, X, Package, Scale, Download, Wand2, Save, CheckCircle2, FolderOpen, ChevronDown, Bookmark, Sparkles, FolderPlus } from "lucide-react";
 import { LineItem, CostSheetSupplierSummary, CostSheetRowSummary } from "../types";
 import { exportLandedCostSheetToExcel } from "../services/excelService";
 
@@ -184,6 +184,243 @@ export const STANDARD_COST_HEAD_DEFAULTS: Omit<CostSheetRow, "id">[] = [
   },
 ];
 
+export interface SavedCostSheetTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  rows: CostSheetRow[];
+  savedAt: string;
+  isBuiltIn?: boolean;
+}
+
+export const BUILT_IN_CUSTOM_PRESETS: SavedCostSheetTemplate[] = [
+  {
+    id: "preset-import-logistics",
+    name: "Import & Overseas Logistics",
+    description: "Base product cost, sea/air freight, port handling, customs duty & insurance",
+    savedAt: "Built-in Preset",
+    isBuiltIn: true,
+    rows: [
+      {
+        id: "cust-imp-1",
+        categoryKey: "product",
+        costHead: "Base Cost (FOB Overseas Purchase)",
+        badgeText: "BASE COST",
+        description: "Direct unit purchase price from overseas supplier",
+        placeholder: "Supplier quote amount",
+        type: "Flat",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+      {
+        id: "cust-imp-2",
+        categoryKey: "freight",
+        costHead: "Sea / Air Freight & Logistics",
+        description: "International cargo transportation & forwarder fee",
+        placeholder: "Freight forwarder charge",
+        type: "%",
+        typeValue: 8,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 8 },
+        isVisible: true,
+      },
+      {
+        id: "cust-imp-3",
+        categoryKey: "customs",
+        costHead: "Customs Duty & Tariff Taxes",
+        description: "Import tariffs & local customs duty assessment",
+        placeholder: "Customs duty estimate",
+        type: "%",
+        typeValue: 12,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 12 },
+        isVisible: true,
+      },
+      {
+        id: "cust-imp-4",
+        categoryKey: "loading",
+        costHead: "Port Handling & Terminal Charges (THC)",
+        description: "Container drayage, port clearance & handling fees",
+        placeholder: "Port clearance charges",
+        type: "Flat",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+      {
+        id: "cust-imp-5",
+        categoryKey: "insurance",
+        costHead: "Transit & Cargo Marine Insurance",
+        description: "Transit risk policy & marine cover",
+        placeholder: "Insurance premium",
+        type: "%",
+        typeValue: 1.5,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 1.5 },
+        isVisible: true,
+      },
+      {
+        id: "cust-imp-6",
+        categoryKey: "warehousing",
+        costHead: "Inland Transport & Storage",
+        description: "Trucking from port to distribution warehouse",
+        placeholder: "Local trucking cost",
+        type: "Flat",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+    ],
+  },
+  {
+    id: "preset-manufacturing",
+    name: "Manufacturing & Production",
+    description: "Raw material base cost, direct labour, tooling wear, packaging & QC inspection",
+    savedAt: "Built-in Preset",
+    isBuiltIn: true,
+    rows: [
+      {
+        id: "cust-mfg-1",
+        categoryKey: "product",
+        costHead: "Base Raw Material Cost (BOM)",
+        badgeText: "DIRECT MATERIAL",
+        description: "Raw materials and component purchase allocation",
+        placeholder: "BOM / material cost",
+        type: "Flat",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+      {
+        id: "cust-mfg-2",
+        categoryKey: "labour",
+        costHead: "Direct Labour & Assembly",
+        description: "Machining, assembly line & technician charges",
+        placeholder: "Assembly labor cost",
+        type: "%",
+        typeValue: 15,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 15 },
+        isVisible: true,
+      },
+      {
+        id: "cust-mfg-3",
+        categoryKey: "other",
+        costHead: "Tooling & Machine Overhead Allocation",
+        description: "Equipment depreciation & tooling allocation per unit",
+        placeholder: "Machine overhead rate",
+        type: "Per Unit",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+      {
+        id: "cust-mfg-4",
+        categoryKey: "packaging",
+        costHead: "Export Packaging & Labelling",
+        description: "Cartons, pallets, strapping & barcode labelling",
+        placeholder: "Packaging per unit",
+        type: "Flat",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+      {
+        id: "cust-mfg-5",
+        categoryKey: "inspection",
+        costHead: "Quality Assurance & Batch Testing",
+        description: "Lab testing, ISO compliance & QA inspection fee",
+        placeholder: "QA fee",
+        type: "Flat",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+    ],
+  },
+  {
+    id: "preset-distribution",
+    name: "Distribution & Wholesale",
+    description: "Base wholesale unit price, logistics, pallet storage & credit transaction fees",
+    savedAt: "Built-in Preset",
+    isBuiltIn: true,
+    rows: [
+      {
+        id: "cust-dist-1",
+        categoryKey: "product",
+        costHead: "Base Wholesale Unit Price",
+        badgeText: "WHOLESALE BASE",
+        description: "Base purchase price per wholesale unit",
+        placeholder: "Wholesale unit rate",
+        type: "Flat",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+      {
+        id: "cust-dist-2",
+        categoryKey: "freight",
+        costHead: "Logistics & Delivery Freight",
+        description: "Courier freight & last-mile delivery fee",
+        placeholder: "Delivery fee per unit",
+        type: "Per Unit",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+      {
+        id: "cust-dist-3",
+        categoryKey: "warehousing",
+        costHead: "Pallet Storage & Handling",
+        description: "3PL warehouse rack storage and pick-pack charges",
+        placeholder: "Storage allocation",
+        type: "Flat",
+        typeValue: 0,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 0 },
+        isVisible: true,
+      },
+      {
+        id: "cust-dist-4",
+        categoryKey: "bank",
+        costHead: "Payment & Financial Gateway Charges",
+        description: "Bank transfer fees, credit terms & payment gateway",
+        placeholder: "Bank transaction %",
+        type: "%",
+        typeValue: 2,
+        amount: 0,
+        supplierAmounts: { "sup-1": 0 },
+        supplierTypeValues: { "sup-1": 2 },
+        isVisible: true,
+      },
+    ],
+  },
+];
+
 const INITIAL_CUSTOM_SHEET_ROWS: CostSheetRow[] = [
   {
     id: "cust-row-1",
@@ -200,6 +437,153 @@ const INITIAL_CUSTOM_SHEET_ROWS: CostSheetRow[] = [
     isVisible: true,
   },
 ];
+
+interface TemplateLoadDropdownMenuProps {
+  savedTemplatesList: SavedCostSheetTemplate[];
+  activeTemplateName: string;
+  onApplyTemplate: (template: SavedCostSheetTemplate) => void;
+  onDeleteTemplate: (id: string, e: React.MouseEvent) => void;
+  onOpenSaveModal: () => void;
+  buttonClassName?: string;
+  dropDirection?: "up" | "down";
+}
+
+const TemplateLoadDropdownMenu: React.FC<TemplateLoadDropdownMenuProps> = ({
+  savedTemplatesList,
+  activeTemplateName,
+  onApplyTemplate,
+  onDeleteTemplate,
+  onOpenSaveModal,
+  buttonClassName = "px-3.5 py-1.5 bg-white hover:bg-emerald-100/80 text-emerald-900 rounded-xl text-xs font-extrabold border border-emerald-300 shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer",
+  dropDirection = "down",
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDownOutside = (event: MouseEvent | TouchEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDownOutside);
+    document.addEventListener("touchstart", handlePointerDownOutside);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDownOutside);
+      document.removeEventListener("touchstart", handlePointerDownOutside);
+    };
+  }, [isOpen]);
+
+  const handleSelect = (template: SavedCostSheetTemplate) => {
+    onApplyTemplate(template);
+    setIsOpen(false);
+  };
+
+  const handleOpenSave = () => {
+    onOpenSaveModal();
+    setIsOpen(false);
+  };
+
+  return (
+    <div className="relative inline-block" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className={buttonClassName}
+        title="Load a saved custom layout or industry preset"
+      >
+        <FolderOpen className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+        <span>Load Saved Template</span>
+        <ChevronDown className={`w-3.5 h-3.5 text-emerald-600 shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+      </button>
+
+      {isOpen && (
+        <div
+          className={`absolute ${
+            dropDirection === "up" ? "bottom-full mb-2" : "top-full mt-2"
+          } left-0 w-80 max-h-88 overflow-y-auto bg-white rounded-2xl border border-zinc-200 shadow-2xl z-50 p-2 text-xs divide-y divide-zinc-100 animate-in fade-in zoom-in-95 duration-150`}
+        >
+          {/* Saved Templates Section */}
+          {savedTemplatesList.length > 0 ? (
+            <div className="p-2 space-y-1">
+              <div className="text-[10px] font-black uppercase text-emerald-800 tracking-wider flex items-center gap-1 px-2 py-1">
+                <Bookmark className="w-3 h-3 text-emerald-600" /> Your Saved Custom Templates
+              </div>
+              {savedTemplatesList.map((tpl) => (
+                <div
+                  key={tpl.id}
+                  onClick={() => handleSelect(tpl)}
+                  className={`flex items-center justify-between p-2 rounded-xl cursor-pointer hover:bg-emerald-50/80 transition-colors ${
+                    activeTemplateName === tpl.name ? "bg-emerald-50 border border-emerald-200 font-bold" : ""
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="font-extrabold text-zinc-900 truncate">{tpl.name}</div>
+                    <div className="text-[10px] text-zinc-400 font-medium">
+                      {tpl.rows.length} cost heads • {tpl.savedAt}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0 ml-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteTemplate(tpl.id, e);
+                      }}
+                      className="p-1 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded cursor-pointer"
+                      title="Delete saved template"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-3 text-center text-zinc-500 text-[11px] font-medium italic">
+              No custom templates saved yet. Customize your heads and click "Save Custom Template"!
+            </div>
+          )}
+
+          {/* Industry Presets Section */}
+          <div className="p-2 space-y-1">
+            <div className="text-[10px] font-black uppercase text-zinc-400 tracking-wider flex items-center gap-1 px-2 py-1">
+              <Sparkles className="w-3 h-3 text-blue-500" /> Industry Layout Presets
+            </div>
+            {BUILT_IN_CUSTOM_PRESETS.map((preset) => (
+              <div
+                key={preset.id}
+                onClick={() => handleSelect(preset)}
+                className={`p-2 rounded-xl cursor-pointer hover:bg-blue-50/80 transition-colors ${
+                  activeTemplateName === preset.name ? "bg-blue-50 border border-blue-200 font-bold" : ""
+                }`}
+              >
+                <div className="font-extrabold text-zinc-900">{preset.name}</div>
+                <div className="text-[10px] text-zinc-500 font-medium line-clamp-1">{preset.description}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Action to Save Current as Named Template */}
+          <div className="p-2 pt-1.5">
+            <button
+              type="button"
+              onClick={handleOpenSave}
+              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+              <span>+ Save Current Layout as New Preset</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const INITIAL_SUPPLIERS: SupplierColumn[] = [
   {
@@ -314,8 +698,8 @@ const buildInitialStandardRows = (items: LineItem[]): CostSheetRow[] => {
 export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
   items,
   onChangeItems,
-  currencySymbol = "$",
-  currency = "USD",
+  currencySymbol = "₹",
+  currency = "INR",
   freightAmount,
   setFreightAmount,
   packagingAmount,
@@ -346,9 +730,219 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
   // Ref to prevent two-way sync feedback loop
   const skipNextParentSyncRef = React.useRef<boolean>(false);
 
+  // Custom Sheet Template Persistence Keys
+  const CUSTOM_TEMPLATE_STORAGE_KEY = "billiq_custom_cost_sheet_template";
+  const SAVED_TEMPLATES_LIST_KEY = "billiq_custom_cost_sheet_templates_list";
+  const ACTIVE_TEMPLATE_NAME_KEY = "billiq_active_template_name";
+
+  const [activeTemplateName, setActiveTemplateName] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_TEMPLATE_NAME_KEY) || "My Custom Layout";
+    } catch {
+      return "My Custom Layout";
+    }
+  });
+
+  const [savedTemplatesList, setSavedTemplatesList] = useState<SavedCostSheetTemplate[]>(() => {
+    try {
+      const listStr = localStorage.getItem(SAVED_TEMPLATES_LIST_KEY);
+      if (listStr) {
+        const parsed = JSON.parse(listStr);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.warn("Failed loading saved templates list", e);
+    }
+    return [];
+  });
+
+  const [newTemplateNameInput, setNewTemplateNameInput] = useState<string>("");
+  const [showSaveNameModal, setShowSaveNameModal] = useState<boolean>(false);
+
+  const [isTemplateSaved, setIsTemplateSaved] = useState<boolean>(() => {
+    try {
+      return !!localStorage.getItem(CUSTOM_TEMPLATE_STORAGE_KEY);
+    } catch {
+      return false;
+    }
+  });
+
+  const [customTemplateMessage, setCustomTemplateMessage] = useState<string | null>(null);
+
   // Separate State for Standard Sheet and Custom Sheet
   const [standardRows, setStandardRows] = useState<CostSheetRow[]>(() => buildInitialStandardRows(items));
-  const [customRows, setCustomRows] = useState<CostSheetRow[]>(() => INITIAL_CUSTOM_SHEET_ROWS);
+  const [customRows, setCustomRows] = useState<CostSheetRow[]>(() => {
+    try {
+      const savedStr = localStorage.getItem(CUSTOM_TEMPLATE_STORAGE_KEY);
+      if (savedStr) {
+        const parsed = JSON.parse(savedStr);
+        if (parsed && Array.isArray(parsed.customRows) && parsed.customRows.length > 0) {
+          return parsed.customRows;
+        }
+      }
+    } catch (e) {
+      console.warn("Failed loading saved custom cost sheet template", e);
+    }
+    return INITIAL_CUSTOM_SHEET_ROWS;
+  });
+
+  // Helper to sanitize rows when applying a new template to match active suppliers
+  const sanitizeRowsForSuppliers = (rows: CostSheetRow[]): CostSheetRow[] => {
+    return rows.map(r => {
+      const sAmounts: Record<string, number> = { ...(r.supplierAmounts || {}) };
+      const sTypeVals: Record<string, number> = { ...(r.supplierTypeValues || {}) };
+
+      suppliers.forEach(s => {
+        if (sAmounts[s.id] === undefined) sAmounts[s.id] = s.id === suppliers[0]?.id ? (r.amount || 0) : 0;
+        if (sTypeVals[s.id] === undefined) sTypeVals[s.id] = s.id === suppliers[0]?.id ? (r.typeValue ?? (r.type === "%" ? 0 : r.amount || 0)) : 0;
+      });
+
+      return {
+        ...r,
+        supplierAmounts: sAmounts,
+        supplierTypeValues: sTypeVals,
+      };
+    });
+  };
+
+  // Auto-Load Saved Custom Template from LocalStorage
+  const autoLoadSavedCustomTemplate = () => {
+    try {
+      // 1. First check if primary custom template exists in localStorage
+      const savedStr = localStorage.getItem(CUSTOM_TEMPLATE_STORAGE_KEY);
+      if (savedStr) {
+        const parsed = JSON.parse(savedStr);
+        if (parsed && Array.isArray(parsed.customRows) && parsed.customRows.length > 0) {
+          setCustomRows(sanitizeRowsForSuppliers(parsed.customRows));
+          setIsTemplateSaved(true);
+          const loadedName = parsed.name || localStorage.getItem(ACTIVE_TEMPLATE_NAME_KEY) || "My Custom Layout";
+          setActiveTemplateName(loadedName);
+          setCustomTemplateMessage(`Auto-Loaded Saved Custom Template: "${loadedName}"`);
+          setTimeout(() => setCustomTemplateMessage(null), 3500);
+          return;
+        }
+      }
+
+      // 2. Otherwise check if savedTemplatesList has any items
+      const listStr = localStorage.getItem(SAVED_TEMPLATES_LIST_KEY);
+      if (listStr) {
+        const parsedList: SavedCostSheetTemplate[] = JSON.parse(listStr);
+        if (Array.isArray(parsedList) && parsedList.length > 0) {
+          const latest = parsedList[0];
+          setCustomRows(sanitizeRowsForSuppliers(latest.rows));
+          setIsTemplateSaved(true);
+          setActiveTemplateName(latest.name);
+          setCustomTemplateMessage(`Auto-Loaded Saved Template: "${latest.name}"`);
+          setTimeout(() => setCustomTemplateMessage(null), 3500);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Error auto-loading saved custom cost sheet template", e);
+    }
+  };
+
+  // Switch Tab Handler with Auto-Load
+  const handleSelectCustomTab = () => {
+    setActiveTab("customize");
+    autoLoadSavedCustomTemplate();
+  };
+
+  // Apply Selected Saved Template or Preset
+  const handleApplyTemplate = (template: SavedCostSheetTemplate) => {
+    try {
+      const sanitized = sanitizeRowsForSuppliers(template.rows);
+      setCustomRows(sanitized);
+      setActiveTemplateName(template.name);
+      setIsTemplateSaved(!template.isBuiltIn);
+      localStorage.setItem(ACTIVE_TEMPLATE_NAME_KEY, template.name);
+
+      if (!template.isBuiltIn) {
+        const payload = {
+          name: template.name,
+          customRows: sanitized,
+          savedAt: template.savedAt || new Date().toISOString(),
+        };
+        localStorage.setItem(CUSTOM_TEMPLATE_STORAGE_KEY, JSON.stringify(payload));
+      }
+
+      setCustomTemplateMessage(`Applied Custom Layout: "${template.name}"`);
+      setTimeout(() => setCustomTemplateMessage(null), 3500);
+    } catch (e) {
+      console.error("Failed applying custom template", e);
+    }
+  };
+
+  // Save Custom Template Handler
+  const handleSaveCustomTemplate = (customName?: string) => {
+    try {
+      const templateName = (customName || newTemplateNameInput || activeTemplateName || "My Custom Layout").trim();
+      const nowFormatted = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+      const primaryPayload = {
+        name: templateName,
+        customRows,
+        savedAt: nowFormatted,
+      };
+      localStorage.setItem(CUSTOM_TEMPLATE_STORAGE_KEY, JSON.stringify(primaryPayload));
+
+      const newTemplateObj: SavedCostSheetTemplate = {
+        id: `tpl-${Date.now()}`,
+        name: templateName,
+        rows: customRows,
+        savedAt: nowFormatted,
+      };
+
+      const updatedList = [
+        newTemplateObj,
+        ...savedTemplatesList.filter(t => t.name.toLowerCase() !== templateName.toLowerCase()),
+      ].slice(0, 10);
+
+      setSavedTemplatesList(updatedList);
+      localStorage.setItem(SAVED_TEMPLATES_LIST_KEY, JSON.stringify(updatedList));
+
+      setActiveTemplateName(templateName);
+      localStorage.setItem(ACTIVE_TEMPLATE_NAME_KEY, templateName);
+      setIsTemplateSaved(true);
+      setShowSaveNameModal(false);
+      setNewTemplateNameInput("");
+
+      setCustomTemplateMessage(`Saved Custom Template: "${templateName}"! This layout will automatically load whenever you switch to Custom Sheet.`);
+      setTimeout(() => setCustomTemplateMessage(null), 4000);
+    } catch (e) {
+      console.error("Failed to save custom template", e);
+      setCustomTemplateMessage("Failed to save custom template.");
+      setTimeout(() => setCustomTemplateMessage(null), 3000);
+    }
+  };
+
+  const handleDeleteSavedTemplate = (templateId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const updatedList = savedTemplatesList.filter(t => t.id !== templateId);
+      setSavedTemplatesList(updatedList);
+      localStorage.setItem(SAVED_TEMPLATES_LIST_KEY, JSON.stringify(updatedList));
+
+      setCustomTemplateMessage("Saved custom template removed.");
+      setTimeout(() => setCustomTemplateMessage(null), 2500);
+    } catch (err) {
+      console.error("Failed deleting template", err);
+    }
+  };
+
+  const handleResetCustomTemplate = () => {
+    try {
+      localStorage.removeItem(CUSTOM_TEMPLATE_STORAGE_KEY);
+      localStorage.removeItem(ACTIVE_TEMPLATE_NAME_KEY);
+      setCustomRows(INITIAL_CUSTOM_SHEET_ROWS);
+      setActiveTemplateName("Default Custom Layout");
+      setIsTemplateSaved(false);
+      setCustomTemplateMessage("Reset to Default Custom Sheet Layout.");
+      setTimeout(() => setCustomTemplateMessage(null), 3000);
+    } catch (e) {
+      console.error("Failed to reset custom template", e);
+    }
+  };
 
   // Sync incoming external items changes (e.g. from AI Bulk Line Editor) into standardRows or customRows
   useEffect(() => {
@@ -443,18 +1037,34 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
                   }
                 }
                 curAmounts[sId] = sVal;
-                curTypeValues[sId] = sVal;
               });
             } else {
               curAmounts[targetSupId] = newAmt;
+            }
+
+            if (item.supplierTypeValues && Object.keys(item.supplierTypeValues).length > 0) {
+              Object.entries(item.supplierTypeValues).forEach(([sKey, sVal]) => {
+                let sId = sKey;
+                const sNum = parseInt(sKey, 10);
+                if (!isNaN(sNum) && sNum >= 1 && sNum <= activeSuppliers.length) {
+                  sId = activeSuppliers[sNum - 1].id;
+                } else if (sKey.startsWith("sup-")) {
+                  const supNum = parseInt(sKey.replace("sup-", ""), 10);
+                  if (!isNaN(supNum) && supNum >= 1 && supNum <= activeSuppliers.length) {
+                    sId = activeSuppliers[supNum - 1].id;
+                  }
+                }
+                curTypeValues[sId] = sVal;
+              });
+            } else {
               curTypeValues[targetSupId] = newTypeVal;
             }
 
             if (item.targetSupplierIndex && activeSuppliers[item.targetSupplierIndex - 1]) {
               const explicitSupId = activeSuppliers[item.targetSupplierIndex - 1].id;
-              const valToUse = item.costTypeValue !== undefined ? item.costTypeValue : (item.rate !== undefined ? item.rate : newAmt);
-              curAmounts[explicitSupId] = valToUse;
-              curTypeValues[explicitSupId] = valToUse;
+              const typeValToUse = item.costTypeValue !== undefined ? item.costTypeValue : (item.costType === "%" ? 0 : newTypeVal);
+              curAmounts[explicitSupId] = item.rate !== undefined ? item.rate : newAmt;
+              curTypeValues[explicitSupId] = typeValToUse;
             }
 
             return {
@@ -534,18 +1144,34 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
                     }
                   }
                   curAmounts[sId] = sVal;
-                  curTypeValues[sId] = sVal;
                 });
               } else {
                 curAmounts[targetSupId] = itemAmt;
+              }
+
+              if (item.supplierTypeValues && Object.keys(item.supplierTypeValues).length > 0) {
+                Object.entries(item.supplierTypeValues).forEach(([sKey, sVal]) => {
+                  let sId = sKey;
+                  const sNum = parseInt(sKey, 10);
+                  if (!isNaN(sNum) && sNum >= 1 && sNum <= activeSuppliers.length) {
+                    sId = activeSuppliers[sNum - 1].id;
+                  } else if (sKey.startsWith("sup-")) {
+                    const supNum = parseInt(sKey.replace("sup-", ""), 10);
+                    if (!isNaN(supNum) && supNum >= 1 && supNum <= activeSuppliers.length) {
+                      sId = activeSuppliers[supNum - 1].id;
+                    }
+                  }
+                  curTypeValues[sId] = sVal;
+                });
+              } else {
                 curTypeValues[targetSupId] = newTypeVal;
               }
 
               if (item.targetSupplierIndex && activeSuppliers[item.targetSupplierIndex - 1]) {
                 const explicitSupId = activeSuppliers[item.targetSupplierIndex - 1].id;
-                const valToUse = item.costTypeValue !== undefined ? item.costTypeValue : (item.rate !== undefined ? item.rate : itemAmt);
-                curAmounts[explicitSupId] = valToUse;
-                curTypeValues[explicitSupId] = valToUse;
+                const typeValToUse = item.costTypeValue !== undefined ? item.costTypeValue : (item.costType === "%" ? 0 : newTypeVal);
+                curAmounts[explicitSupId] = item.rate !== undefined ? item.rate : itemAmt;
+                curTypeValues[explicitSupId] = typeValToUse;
               }
 
               updatedBase[matchedRowIndex] = {
@@ -579,18 +1205,34 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
                       }
                     }
                     curAmounts[sId] = sVal;
-                    curTypeValues[sId] = sVal;
                   });
                 } else {
                   curAmounts[targetSupId] = itemAmt;
+                }
+
+                if (item.supplierTypeValues && Object.keys(item.supplierTypeValues).length > 0) {
+                  Object.entries(item.supplierTypeValues).forEach(([sKey, sVal]) => {
+                    let sId = sKey;
+                    const sNum = parseInt(sKey, 10);
+                    if (!isNaN(sNum) && sNum >= 1 && sNum <= activeSuppliers.length) {
+                      sId = activeSuppliers[sNum - 1].id;
+                    } else if (sKey.startsWith("sup-")) {
+                      const supNum = parseInt(sKey.replace("sup-", ""), 10);
+                      if (!isNaN(supNum) && supNum >= 1 && supNum <= activeSuppliers.length) {
+                        sId = activeSuppliers[supNum - 1].id;
+                      }
+                    }
+                    curTypeValues[sId] = sVal;
+                  });
+                } else {
                   curTypeValues[targetSupId] = newTypeVal;
                 }
 
                 if (item.targetSupplierIndex && activeSuppliers[item.targetSupplierIndex - 1]) {
                   const explicitSupId = activeSuppliers[item.targetSupplierIndex - 1].id;
-                  const valToUse = item.costTypeValue !== undefined ? item.costTypeValue : (item.rate !== undefined ? item.rate : itemAmt);
-                  curAmounts[explicitSupId] = valToUse;
-                  curTypeValues[explicitSupId] = valToUse;
+                  const typeValToUse = item.costTypeValue !== undefined ? item.costTypeValue : (item.costType === "%" ? 0 : newTypeVal);
+                  curAmounts[explicitSupId] = item.rate !== undefined ? item.rate : itemAmt;
+                  curTypeValues[explicitSupId] = typeValToUse;
                 }
 
                 updatedBase[existIdx] = {
@@ -829,7 +1471,38 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
   const updateRowType = (rowId: string, newType: "Flat" | "%" | "Per Unit" | "By Weight") => {
     const updater = (prevRows: CostSheetRow[]) => prevRows.map(r => {
       if (r.id !== rowId) return r;
-      return { ...r, type: newType };
+
+      const newSupplierAmounts: Record<string, number> = {};
+
+      suppliers.forEach(s => {
+        const typeVal = getRowTypeValue(r, s.id);
+        let computedAmt = getRowAmount(r, s.id);
+
+        const prodRow = prevRows.find((item, idx) => item.categoryKey === "product" || (isCustomTab && idx === 0)) || prevRows[0];
+        const prodRowAmt = getRowAmount(prodRow, s.id);
+        const childItemsSum = prevRows.filter(item => item.isProductItem).reduce((acc, item) => acc + getRowAmount(item, s.id), 0);
+        const prodCost = prodRowAmt > 0 ? prodRowAmt : childItemsSum;
+
+        if (newType === "%") {
+          computedAmt = Math.round(((prodCost * typeVal) / 100) * 100) / 100;
+        } else if (newType === "Per Unit") {
+          computedAmt = Math.round((typeVal * totalQuantity) * 100) / 100;
+        } else if (newType === "By Weight") {
+          computedAmt = Math.round((typeVal * totalWeight) * 100) / 100;
+        } else {
+          computedAmt = typeVal;
+        }
+        newSupplierAmounts[s.id] = computedAmt;
+      });
+
+      const primarySupId = suppliers[0]?.id || "sup-1";
+
+      return {
+        ...r,
+        type: newType,
+        supplierAmounts: newSupplierAmounts,
+        amount: newSupplierAmounts[primarySupId] ?? r.amount,
+      };
     });
 
     if (isCustomTab) setCustomRows(updater);
@@ -841,11 +1514,14 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
     const updater = (prevRows: CostSheetRow[]) => prevRows.map(r => {
       if (r.id !== rowId) return r;
       const newSupplierAmounts = { ...(r.supplierAmounts || {}), [supplierId]: amount };
+      const newSupplierTypeValues = { ...(r.supplierTypeValues || {}), [supplierId]: amount };
       const isPrimary = supplierId === suppliers[0]?.id;
       return {
         ...r,
         amount: isPrimary ? amount : r.amount,
+        typeValue: isPrimary ? amount : r.typeValue,
         supplierAmounts: newSupplierAmounts,
+        supplierTypeValues: newSupplierTypeValues,
       };
     });
 
@@ -932,7 +1608,7 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
     const baseForPct = prodCostTotal > 0 ? prodCostTotal : totalLandedCost;
 
     const profitAmount = sup.profitType === "%" 
-      ? (baseForPct * (Number(sup.profitValue) || 0)) / 100 
+      ? (totalLandedCost * (Number(sup.profitValue) || 0)) / 100 
       : (Number(sup.profitValue) || 0);
 
     const discountAmount = sup.discountType === "%" 
@@ -1241,7 +1917,7 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
       customerName: customerName || "-",
       projectName: projectName || "-",
       currencySymbol,
-      currency: currency || "USD",
+      currency: currency || "INR",
       totalQuantity,
       totalWeight,
       weightUnit,
@@ -1274,20 +1950,8 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
           </div>
         </div>
 
-        {/* Action Controls: Add Supplier, Export Excel & Tab Switcher */}
+        {/* Action Controls: Add Supplier & Tab Switcher */}
         <div className="flex flex-wrap items-center gap-3 self-start md:self-auto">
-          {/* Export to Excel Button */}
-          <button
-            type="button"
-            onClick={handleExportExcel}
-            className="px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/10 shadow-2xs"
-            title="Export multi-supplier comparison table & calculated formulas to Excel (.xlsx)"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <Download className="w-3.5 h-3.5" />
-            <span>Export Excel (.xlsx)</span>
-          </button>
-
           {/* Add Supplier Button (Max 5) */}
           <button
             type="button"
@@ -1320,7 +1984,7 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("customize")}
+              onClick={handleSelectCustomTab}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === "customize"
                   ? "bg-white text-zinc-900 shadow-xs"
@@ -1334,63 +1998,48 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
         </div>
       </div>
 
-      {/* Cost Basis Inputs Card (Quantity & Weight Controls) */}
-      <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/50 to-white p-4 rounded-2xl border border-blue-100 shadow-2xs flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-xs shrink-0">
-            <Package className="w-4 h-4" />
-          </div>
-          <div>
-            <h3 className="text-xs font-black text-zinc-900 tracking-tight uppercase flex items-center gap-2">
-              Cost Basis Calculation Parameters
-            </h3>
-            <p className="text-[11px] text-zinc-500 font-medium">
-              Product Quantity and Weight drive automatic 'Per Unit' and 'By Weight' cost head calculations
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3.5">
-          {/* Total Quantity */}
-          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-zinc-200 shadow-2xs">
-            <span className="text-[11px] font-extrabold text-zinc-600">Total Quantity:</span>
-            <input
-              type="number"
-              min="1"
-              value={totalQuantity || ""}
-              onChange={(e) => setTotalQuantity(Math.max(1, parseFloat(e.target.value) || 0))}
-              className="w-20 font-extrabold text-xs text-zinc-900 focus:outline-none text-right bg-transparent border-b border-zinc-200 focus:border-blue-500 px-1 py-0.5"
-              placeholder="100"
-            />
-            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wide">Pcs / Units</span>
-          </div>
-
-          {/* Total Weight */}
-          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-zinc-200 shadow-2xs">
-            <div className="flex items-center gap-1">
-              <Scale className="w-3.5 h-3.5 text-zinc-400" />
-              <span className="text-[11px] font-extrabold text-zinc-600">Total Weight:</span>
+      {/* Persistent Active Template Indicator Banner for Custom Sheet */}
+      {isCustomTab && (
+        <div className="bg-gradient-to-r from-emerald-50/90 via-teal-50/60 to-emerald-50/90 border border-emerald-200/90 p-3.5 rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-2xs animate-in fade-in duration-200">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-600 text-white rounded-xl shadow-xs shrink-0">
+              <CheckCircle2 className="w-4.5 h-4.5" />
             </div>
-            <input
-              type="number"
-              min="0"
-              step="any"
-              value={totalWeight === 0 ? "" : totalWeight}
-              onChange={(e) => setTotalWeight(Math.max(0, parseFloat(e.target.value) || 0))}
-              className="w-20 font-extrabold text-xs text-zinc-900 focus:outline-none text-right bg-transparent border-b border-zinc-200 focus:border-blue-500 px-1 py-0.5"
-              placeholder="500"
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800">ACTIVE CUSTOM TEMPLATE</span>
+                <span className="px-2 py-0.5 bg-emerald-600 text-white text-[9px] font-black uppercase rounded-md shadow-xs">
+                  {isTemplateSaved ? "Saved & Persistent" : "Active Layout"}
+                </span>
+              </div>
+              <h4 className="text-xs font-extrabold text-emerald-950 flex items-center gap-1.5 mt-0.5">
+                Active Template: <span className="text-emerald-900 font-black underline underline-offset-2 decoration-emerald-400">{activeTemplateName}</span>
+              </h4>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <TemplateLoadDropdownMenu
+              savedTemplatesList={savedTemplatesList}
+              activeTemplateName={activeTemplateName}
+              onApplyTemplate={handleApplyTemplate}
+              onDeleteTemplate={handleDeleteSavedTemplate}
+              onOpenSaveModal={() => setShowSaveNameModal(true)}
+              dropDirection="down"
+              buttonClassName="px-3.5 py-1.5 bg-white hover:bg-emerald-100/80 text-emerald-900 rounded-xl text-xs font-extrabold border border-emerald-300 shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
             />
-            <select
-              value={weightUnit}
-              onChange={(e) => setWeightUnit(e.target.value as "kg" | "lbs")}
-              className="font-extrabold text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-1.5 py-0.5 focus:outline-none cursor-pointer"
+
+            <button
+              type="button"
+              onClick={() => setShowSaveNameModal(true)}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
             >
-              <option value="kg">kg</option>
-              <option value="lbs">lbs</option>
-            </select>
+              <Save className="w-3.5 h-3.5" />
+              <span>Save Template</span>
+            </button>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Max Suppliers Alert Banner */}
       {showMaxNotification && (
@@ -1501,6 +2150,64 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
         </div>
       )}
 
+      {/* Cost Basis Inputs Card (Quantity & Weight Controls) */}
+      <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/50 to-white p-4 rounded-2xl border border-blue-100 shadow-2xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-xs shrink-0">
+            <Package className="w-4 h-4" />
+          </div>
+          <div>
+            <h3 className="text-xs font-black text-zinc-900 tracking-tight uppercase flex items-center gap-2">
+              Cost Basis Calculation Parameters
+            </h3>
+            <p className="text-[11px] text-zinc-500 font-medium">
+              Product Quantity and Weight drive automatic 'Per Unit' and 'By Weight' cost head calculations
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3.5">
+          {/* Total Quantity */}
+          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-zinc-200 shadow-2xs">
+            <span className="text-[11px] font-extrabold text-zinc-600">Total Quantity:</span>
+            <input
+              type="number"
+              min="1"
+              value={totalQuantity || ""}
+              onChange={(e) => setTotalQuantity(Math.max(1, parseFloat(e.target.value) || 0))}
+              className="w-20 font-extrabold text-xs text-zinc-900 focus:outline-none text-right bg-transparent border-b border-zinc-200 focus:border-blue-500 px-1 py-0.5"
+              placeholder="100"
+            />
+            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wide">Pcs / Units</span>
+          </div>
+
+          {/* Total Weight */}
+          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-zinc-200 shadow-2xs">
+            <div className="flex items-center gap-1">
+              <Scale className="w-3.5 h-3.5 text-zinc-400" />
+              <span className="text-[11px] font-extrabold text-zinc-600">Total Weight:</span>
+            </div>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={totalWeight === 0 ? "" : totalWeight}
+              onChange={(e) => setTotalWeight(Math.max(0, parseFloat(e.target.value) || 0))}
+              className="w-20 font-extrabold text-xs text-zinc-900 focus:outline-none text-right bg-transparent border-b border-zinc-200 focus:border-blue-500 px-1 py-0.5"
+              placeholder="500"
+            />
+            <select
+              value={weightUnit}
+              onChange={(e) => setWeightUnit(e.target.value as "kg" | "lbs")}
+              className="font-extrabold text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-1.5 py-0.5 focus:outline-none cursor-pointer"
+            >
+              <option value="kg">kg</option>
+              <option value="lbs">lbs</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       {/* MAIN TABLE CONTAINER (Standard or Custom View) */}
       <div className="bg-white rounded-2xl border border-zinc-200/80 shadow-sm overflow-x-auto">
         <table className="w-full text-left text-xs border-collapse min-w-[700px]">
@@ -1597,7 +2304,7 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
                                 if (isCustomTab) updateCustomRow(row.id, { costHead: e.target.value });
                                 else updateStandardRow(row.id, { costHead: e.target.value });
                               }}
-                              placeholder="Item Name (e.g. Kiwis, Mangoes)"
+                              placeholder="Item Name (e.g. Product A, Product B)"
                               className="w-full bg-blue-50/50 border border-blue-200 rounded-lg px-2 py-1 text-xs font-bold text-zinc-900 focus:outline-none focus:bg-white focus:ring-1 focus:ring-blue-500"
                             />
                             {row.isAiEdited ? (
@@ -1708,10 +2415,10 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
                         onChange={(e) => updateRowType(row.id, e.target.value as "Flat" | "%" | "Per Unit" | "By Weight")}
                         className="w-full bg-zinc-50 border border-zinc-200/90 rounded-xl px-2.5 py-1.5 text-xs font-extrabold text-zinc-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:bg-white cursor-pointer"
                       >
-                        <option value="Flat">Flat Price ($)</option>
+                        <option value="Flat">Flat Price</option>
                         {!isFirstRow && <option value="%">Percentage (%)</option>}
-                        <option value="Per Unit">Per Unit ($/unit)</option>
-                        <option value="By Weight">By Weight (${weightUnit === 'kg' ? '/kg' : '/lb'})</option>
+                        <option value="Per Unit">Per Unit</option>
+                        <option value="By Weight">By Weight (Per {weightUnit})</option>
                       </select>
                     </td>
 
@@ -1883,7 +2590,24 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
           </tbody>
         </table>
 
-        {/* Table Bottom Action Bar (Add Line & Reset) */}
+        {/* Custom Template Toast Notification */}
+        {isCustomTab && customTemplateMessage && (
+          <div className="mx-4 my-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl flex items-center justify-between text-xs font-bold animate-in fade-in duration-200">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{customTemplateMessage}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCustomTemplateMessage(null)}
+              className="p-1 text-emerald-700 hover:bg-emerald-100 rounded-lg cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Table Bottom Action Bar (Add Line, Save Template, Load Template Dropdown & Reset) */}
         <div className="p-4 bg-zinc-50/50 border-t border-zinc-100 flex flex-wrap justify-between items-center gap-4">
           <div className="flex flex-wrap items-center gap-2.5">
             <button
@@ -1895,18 +2619,122 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
               <Plus className="w-3.5 h-3.5" />
               <span>+ Add Cost Line / Field</span>
             </button>
+
+            {isCustomTab && (
+              <TemplateLoadDropdownMenu
+                savedTemplatesList={savedTemplatesList}
+                activeTemplateName={activeTemplateName}
+                onApplyTemplate={handleApplyTemplate}
+                onDeleteTemplate={handleDeleteSavedTemplate}
+                onOpenSaveModal={() => setShowSaveNameModal(true)}
+                dropDirection="up"
+                buttonClassName="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100/90 text-emerald-900 border border-emerald-300 rounded-xl text-xs font-extrabold shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
+              />
+            )}
+
+            {isCustomTab && (
+              <button
+                type="button"
+                onClick={() => setShowSaveNameModal(true)}
+                className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-extrabold shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
+                title="Save current custom cost heads, descriptions, and calculation rules"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Save Custom Template</span>
+              </button>
+            )}
+
+            {isCustomTab && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-900 rounded-xl text-[11px] font-extrabold border border-emerald-200/80 shadow-2xs">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>Active Template: <strong className="text-emerald-950 font-black underline underline-offset-2 decoration-emerald-400">{activeTemplateName}</strong></span>
+              </span>
+            )}
           </div>
 
-          <button
-            type="button"
-            onClick={handleResetToDefault}
-            className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-            title="Reset sheet to default cost heads"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Reset Sheet
-          </button>
+          <div className="flex items-center gap-2">
+            {isCustomTab ? (
+              <button
+                type="button"
+                onClick={handleResetCustomTemplate}
+                className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border border-zinc-200/60"
+                title="Reset sheet to default custom cost heads"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset Layout
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleResetToDefault}
+                className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                title="Reset sheet to default cost heads"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset Sheet
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Save Template Name Modal */}
+        {showSaveNameModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl border border-zinc-200 shadow-2xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
+                    <Save className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-zinc-900">Save Custom Cost Template</h3>
+                    <p className="text-xs text-zinc-500 font-medium">Save this layout for instant 1-click re-use</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSaveNameModal(false)}
+                  className="p-1 text-zinc-400 hover:text-zinc-700 rounded-lg cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-zinc-700">Template Name</label>
+                <input
+                  type="text"
+                  value={newTemplateNameInput}
+                  onChange={(e) => setNewTemplateNameInput(e.target.value)}
+                  placeholder={activeTemplateName || "e.g. Overseas Import & Duty Layout"}
+                  className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3.5 py-2.5 text-xs font-extrabold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:bg-white"
+                  autoFocus
+                />
+                <p className="text-[11px] text-zinc-500">
+                  This template will auto-load when you switch to Custom Sheet, and will be saved in your quick load dropdown.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setShowSaveNameModal(false)}
+                  className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-bold text-xs rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveCustomTemplate(newTemplateNameInput)}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-md cursor-pointer flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Save Template</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* TOTALS & SUPPLIER COMPARISON MATRIX FOOTER */}
@@ -1966,7 +2794,7 @@ export const LandedCostSheet: React.FC<LandedCostSheetProps> = ({
               <tr>
                 <td className="py-3 px-3 font-semibold text-zinc-700">
                   <span className="block font-bold">Target Profit Margin / Markup (+)</span>
-                  <span className="text-[10px] text-zinc-400 font-normal">Calculated on base product price</span>
+                  <span className="text-[10px] text-zinc-400 font-normal">Calculated on Total Landed Cost</span>
                 </td>
                 {supplierCalculations.map(c => (
                   <td key={c.supplier.id} className="py-3 px-3 text-right">

@@ -3,8 +3,125 @@ import { sanitizeExtractedDescription } from "../utils/itemUtils";
 import mammoth from "mammoth";
 import { read, utils } from "xlsx";
 import { auth } from "./firebase";
+import { getDisplayErrorMessage } from "../utils/errorUtils";
 
 export { sanitizeExtractedDescription };
+
+/**
+ * Preserves high-resolution image detail (up to 4096px) for OCR legibility of dense 200+ item tables.
+ * Non-image files (PDF, DOCX, XLSX) and crisp images are preserved with zero degradation.
+ */
+export async function compressImageFile(
+  file: File,
+  maxDimension = 4096,
+  quality = 0.95
+): Promise<{ base64Data: string; mimeType: string }> {
+  // If not an image (e.g. PDF) or is SVG, convert to standard base64 directly with zero quality loss
+  if (!file.type.startsWith("image/") || file.type === "image/svg+xml") {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const fullStr = e.target?.result as string;
+        const parts = fullStr.split(",");
+        resolve({
+          base64Data: parts[1] || fullStr,
+          mimeType: file.type || "application/pdf",
+        });
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const rawDataUrl = e.target?.result as string;
+      const parts = rawDataUrl.split(",");
+      const rawBase64 = parts[1] || rawDataUrl;
+
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let { width, height } = img;
+
+          // If image dimensions are within 4096px and size is reasonable, keep raw image without re-compression
+          if (width <= maxDimension && height <= maxDimension && file.size <= 15 * 1024 * 1024) {
+            resolve({ base64Data: rawBase64, mimeType: file.type || "image/jpeg" });
+            return;
+          }
+
+          // Proportionally scale only if exceeding 4096px
+          if (width > maxDimension || height > maxDimension) {
+            if (width > height) {
+              height = Math.round((height * maxDimension) / width);
+              width = maxDimension;
+            } else {
+              width = Math.round((width * maxDimension) / height);
+              height = maxDimension;
+            }
+          }
+
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+
+          if (!ctx) {
+            resolve({ base64Data: rawBase64, mimeType: file.type });
+            return;
+          }
+
+          // High-quality interpolation for OCR legibility of fine text
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = "high";
+
+          // White background prevents transparent PNGs from becoming black
+          ctx.fillStyle = "#FFFFFF";
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+
+          const outputMime = file.type === "image/png" ? "image/png" : "image/jpeg";
+          const dataUrl = canvas.toDataURL(outputMime, quality);
+          const base64Data = dataUrl.split(",")[1];
+
+          resolve({ base64Data: base64Data || rawBase64, mimeType: outputMime });
+        } catch (err) {
+          console.warn("[Image Processing] Canvas resize fallback to raw:", err);
+          resolve({ base64Data: rawBase64, mimeType: file.type });
+        }
+      };
+      img.onerror = () => {
+        resolve({ base64Data: rawBase64, mimeType: file.type });
+      };
+      img.src = rawDataUrl;
+    };
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Performs a fetch request with timeout protection (default 180 seconds for large 200+ item parsing)
+ */
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 180000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error: any) {
+    clearTimeout(id);
+    if (error.name === "AbortError") {
+      throw new Error("Request timed out while analyzing large document. Please ensure stable internet connection or try again.");
+    }
+    throw error;
+  }
+}
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
@@ -12,7 +129,10 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   };
   try {
     if (auth?.currentUser) {
-      const token = await auth.currentUser.getIdToken();
+      let token = await auth.currentUser.getIdToken(false);
+      if (!token) {
+        token = await auth.currentUser.getIdToken(true);
+      }
       if (token) {
         headers["Authorization"] = `Bearer ${token}`;
       }
@@ -23,19 +143,8 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-export function getFriendlyGeminiError(error: any): string {
-  if (!error) return "An unexpected error occurred.";
-  const msg = typeof error === "string" ? error : error.message || String(error);
-  if (msg.includes("429") || msg.includes("quota") || msg.includes("RESOURCE_EXHAUSTED")) {
-    return "API rate limit reached. Please try again in a moment.";
-  }
-  if (msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("high demand") || msg.includes("spikes in demand")) {
-    return "The AI service is experiencing temporary high demand from the provider. Please try again in a few moments.";
-  }
-  if (msg.includes("API call failed")) {
-    return "Failed to analyze document. The AI service may be temporarily busy. Please try again in a moment.";
-  }
-  return msg;
+export function getFriendlyGeminiError(error: any, userEmail?: string | null): string {
+  return getDisplayErrorMessage(error, userEmail, "Unable to generate details at this moment. Please try again or fill in the fields manually.");
 }
 
 export function estimateItemWeight(description: string, quantity: number = 1): number {
@@ -54,7 +163,7 @@ export function estimateItemWeight(description: string, quantity: number = 1): n
     baseWeight = Math.pow(size, 1.8) * 0.9;
   }
 
-  return Math.round(baseWeight * quantity * 100) / 100;
+  return Math.round(baseWeight * Math.max(1, quantity) * 100) / 100;
 }
 
 export function checkForLocalOrCatalogWeight(description: string): number | null {
@@ -100,39 +209,120 @@ export async function callWithRetry<T>(
 }
 
 /**
- * A highly robust JSON parser that handles clean, unescaped, or truncated JSON responses.
+ * A highly robust JSON parser that handles clean, unescaped, or truncated JSON responses
+ * (especially useful for large 200+ item line-item extractions).
  */
 export function safeJSONParse(text: string, fallback: any = {}): any {
-  if (!text) return fallback;
+  if (!text || typeof text !== "string") return fallback;
   let cleaned = text.trim();
 
   if (cleaned.includes("```json")) {
-    const match = cleaned.match(/```json\s*([\s\S]*?)\s*```/);
-    if (match) cleaned = match[1].trim();
+    const match = cleaned.match(/```json\s*([\s\S]*?)\s*(?:```|$)/);
+    if (match && match[1]) cleaned = match[1].trim();
   } else if (cleaned.includes("```")) {
-    const match = cleaned.match(/```\s*([\s\S]*?)\s*```/);
-    if (match) cleaned = match[1].trim();
+    const match = cleaned.match(/```\s*([\s\S]*?)\s*(?:```|$)/);
+    if (match && match[1]) cleaned = match[1].trim();
   }
 
+  // 1. Direct JSON parse
   try {
     return JSON.parse(cleaned);
   } catch (e) {
-    // Basic repair if needed
-    try {
-      const start = Math.min(
-        cleaned.indexOf("{") !== -1 ? cleaned.indexOf("{") : Infinity,
-        cleaned.indexOf("[") !== -1 ? cleaned.indexOf("[") : Infinity
-      );
-      const end = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
-      if (start !== Infinity && end !== -1 && end > start) {
-        return JSON.parse(cleaned.slice(start, end + 1));
-      }
-    } catch (e2) {
-      console.error("JSON parse failed:", e2);
+    // Continue to boundary extraction
+  }
+
+  // 2. Substring boundary parsing ({...} or [...])
+  try {
+    const startObj = cleaned.indexOf("{");
+    const startArr = cleaned.indexOf("[");
+    let start = -1;
+    if (startObj !== -1 && startArr !== -1) {
+      start = Math.min(startObj, startArr);
+    } else if (startObj !== -1) {
+      start = startObj;
+    } else if (startArr !== -1) {
+      start = startArr;
     }
+
+    const endObj = cleaned.lastIndexOf("}");
+    const endArr = cleaned.lastIndexOf("]");
+    const end = Math.max(endObj, endArr);
+
+    if (start !== -1 && end !== -1 && end > start) {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    }
+  } catch (e2) {
+    // Continue to truncated array recovery
+  }
+
+  // 3. Truncated array / unclosed bracket repair for massive 200+ line item payloads
+  try {
+    const startObj = cleaned.indexOf("{");
+    if (startObj !== -1) {
+      const str = cleaned.slice(startObj);
+      const lastItemEnd = str.lastIndexOf("}");
+      if (lastItemEnd !== -1) {
+        let candidate = str.slice(0, lastItemEnd + 1);
+        const openBraces = (candidate.match(/\{/g) || []).length;
+        const closeBraces = (candidate.match(/\}/g) || []).length;
+        const openBrackets = (candidate.match(/\[/g) || []).length;
+        const closeBrackets = (candidate.match(/\]/g) || []).length;
+
+        for (let i = 0; i < openBrackets - closeBrackets; i++) {
+          candidate += "]";
+        }
+        for (let i = 0; i < openBraces - closeBraces; i++) {
+          candidate += "}";
+        }
+
+        try {
+          return JSON.parse(candidate);
+        } catch {
+          candidate = candidate.replace(/,\s*([\}\]])/g, "$1");
+          return JSON.parse(candidate);
+        }
+      }
+    }
+  } catch (repairErr) {
+    console.warn("Truncated JSON recovery failed in geminiService:", repairErr);
   }
 
   return fallback;
+}
+
+/**
+ * Normalizes and sanitizes extracted products to prevent NaN values, negative rates, or missing units.
+ */
+function sanitizeExtractedProducts(products: any[]): any[] {
+  if (!Array.isArray(products)) return [];
+  return products
+    .filter((p) => p && typeof p === "object")
+    .map((p, idx) => {
+      const rawQty = typeof p.quantity === "number" ? p.quantity : parseFloat(String(p.quantity || "1").replace(/,/g, ""));
+      const quantity = isNaN(rawQty) || rawQty <= 0 ? 1 : rawQty;
+
+      const rawRate = typeof p.rate === "number" ? p.rate : parseFloat(String(p.rate || "0").replace(/,/g, ""));
+      const rate = isNaN(rawRate) || rawRate < 0 ? 0 : rawRate;
+
+      const rawTax = typeof p.suggestedTaxRate === "number" ? p.suggestedTaxRate : parseFloat(String(p.suggestedTaxRate || "18"));
+      const suggestedTaxRate = isNaN(rawTax) || rawTax < 0 ? 18 : Math.min(rawTax, 100);
+
+      const rawName = p.name || p.description || `Item ${idx + 1}`;
+      const name = sanitizeExtractedDescription(String(rawName));
+
+      const rawUnit = String(p.unit || "NOS").trim().toUpperCase();
+      const unit = rawUnit.length > 0 ? rawUnit : "NOS";
+
+      return {
+        ...p,
+        name,
+        quantity,
+        rate,
+        suggestedTaxRate,
+        unit,
+        hsn: p.hsn ? String(p.hsn).trim() : "",
+      };
+    });
 }
 
 async function extractTextFromFile(file: File): Promise<string | null> {
@@ -196,7 +386,7 @@ export async function smartAnalyzeDimensionalReport(
   currentReports: DimensionalOrderItem[]
 ): Promise<DimensionalOrderItem[]> {
   try {
-    const res = await fetch("/api/smart-analyze-dimensional-report", {
+    const res = await fetchWithTimeout("/api/smart-analyze-dimensional-report", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify({ items, currentReports }),
@@ -215,7 +405,7 @@ export async function checkTolerances(
   report: DimensionalOrderItem
 ): Promise<{ dimensions: Record<string, { tolerance: string; status: "valid" | "invalid"; message?: string }> }> {
   try {
-    const res = await fetch("/api/check-tolerances", {
+    const res = await fetchWithTimeout("/api/check-tolerances", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify({ report }),
@@ -236,7 +426,7 @@ export async function processVoiceInput(
   letterhead: string = ""
 ): Promise<Partial<AIProductSuggestion> | null> {
   try {
-    const res = await fetch("/api/process-voice-input", {
+    const res = await fetchWithTimeout("/api/process-voice-input", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify({ transcript, industry, letterhead }),
@@ -250,7 +440,6 @@ export async function processVoiceInput(
     return null;
   }
 }
-
 
 export async function extractDocumentData(
   file: File,
@@ -270,6 +459,14 @@ export async function analyzeDocument(
   businessName: string = ""
 ): Promise<AIDocumentAnalysis | null> {
   try {
+    if (!file) {
+      throw new Error("No file provided for document analysis.");
+    }
+
+    if (file.size > 25 * 1024 * 1024) {
+      throw new Error("File size exceeds 25MB. Please upload a smaller file or split pages into batches.");
+    }
+
     const extractedText = await extractTextFromFile(file);
 
     let payload: any = {
@@ -282,38 +479,39 @@ export async function analyzeDocument(
     if (extractedText) {
       payload.extractedText = extractedText;
     } else {
-      const fileContent = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve((e.target?.result as string).split(",")[1]);
-        reader.onerror = (e) => reject(e);
-        reader.readAsDataURL(file);
-      });
-
-      payload.fileContent = fileContent;
-      payload.mimeType = file.type;
+      // Compress/downscale high-res images to avoid Base64 memory bloating and 413 Payload Too Large
+      const { base64Data, mimeType } = await compressImageFile(file);
+      payload.fileContent = base64Data;
+      payload.mimeType = mimeType;
     }
 
-    const res = await fetch("/api/analyze-document", {
+    const res = await fetchWithTimeout("/api/analyze-document", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify(payload),
-    });
+    }, 180000);
 
     if (!res.ok) {
       let errText = "API call failed";
       try {
         const errData = await res.json();
         if (errData?.error) errText = errData.error;
-      } catch {}
+      } catch {
+        if (res.status === 413) {
+          errText = "File upload payload is too large. Please upload an image with lower resolution or a smaller file size.";
+        } else if (res.status === 429) {
+          errText = "AI analysis rate limit reached. Please wait a few seconds and try again.";
+        } else if (res.status === 503) {
+          errText = "The AI service is experiencing high demand. Please try again shortly.";
+        }
+      }
       throw new Error(errText);
     }
+
     const data = await res.json();
     const result: AIDocumentAnalysis | null = data.result || null;
     if (result && Array.isArray(result.products)) {
-      result.products = result.products.map((p) => ({
-        ...p,
-        name: sanitizeExtractedDescription(p.name || (p as any).description || ""),
-      }));
+      result.products = sanitizeExtractedProducts(result.products);
     }
     return result;
   } catch (error) {
@@ -328,27 +526,35 @@ export async function analyzeTextContent(
   businessName: string = ""
 ): Promise<AIDocumentAnalysis | null> {
   try {
-    const res = await fetch("/api/analyze-text-content", {
+    if (!text || !text.trim()) {
+      throw new Error("No text content provided for analysis.");
+    }
+
+    const res = await fetchWithTimeout("/api/analyze-text-content", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify({ text, industry, businessName }),
-    });
+    }, 180000);
 
     if (!res.ok) {
       let errText = "API call failed";
       try {
         const errData = await res.json();
         if (errData?.error) errText = errData.error;
-      } catch {}
+      } catch {
+        if (res.status === 429) {
+          errText = "Rate limit reached. Please wait a moment and try again.";
+        } else if (res.status === 503) {
+          errText = "AI service is currently busy. Please retry in a few moments.";
+        }
+      }
       throw new Error(errText);
     }
+
     const data = await res.json();
     const result: AIDocumentAnalysis | null = data.result || null;
     if (result && Array.isArray(result.products)) {
-      result.products = result.products.map((p) => ({
-        ...p,
-        name: sanitizeExtractedDescription(p.name || (p as any).description || ""),
-      }));
+      result.products = sanitizeExtractedProducts(result.products);
     }
     return result;
   } catch (error) {
@@ -362,11 +568,11 @@ export async function generateInvoiceNotes(
   businessName: string
 ): Promise<string> {
   try {
-    const res = await fetch("/api/generate-bill-notes", {
+    const res = await fetchWithTimeout("/api/generate-bill-notes", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify({ items, businessName }),
-    });
+    }, 30000);
 
     if (!res.ok) throw new Error("API call failed");
     const data = await res.json();
@@ -404,11 +610,11 @@ export async function analyzeLetterhead(
   imageData: string
 ): Promise<Partial<BusinessDetails> | null> {
   try {
-    const res = await fetch("/api/analyze-letterhead", {
+    const res = await fetchWithTimeout("/api/analyze-letterhead", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify({ imageData }),
-    });
+    }, 30000);
 
     if (!res.ok) throw new Error("API call failed");
     const data = await res.json();
@@ -479,78 +685,24 @@ export async function analyzePriceAnomaly(
 }
 
 export async function searchAndGetHSN(description: string): Promise<string> {
-  if (!description || typeof description !== 'string' || description.trim().length < 3) return "";
+  if (!description || typeof description !== 'string' || description.trim().length < 2) return "";
 
-  const desc = (description || "").toLowerCase();
-
-  // 1. Instant offline keyword classifier
-  if (
-    desc.includes("stainless") ||
-    desc.includes("ss") ||
-    desc.includes("304") ||
-    desc.includes("316") ||
-    desc.includes("a182")
-  ) {
-    if (desc.includes("flange")) return "73072100";
-    if (
-      desc.includes("elbow") ||
-      desc.includes("tee") ||
-      desc.includes("reducer") ||
-      desc.includes("cap") ||
-      desc.includes("fitting")
-    )
-      return "73072300";
-  }
-  if (
-    desc.includes("carbon") ||
-    desc.includes("cs") ||
-    desc.includes("lf2") ||
-    desc.includes("a105") ||
-    desc.includes("wpl6") ||
-    desc.includes("wpb")
-  ) {
-    if (desc.includes("flange")) return "73079190";
-    if (
-      desc.includes("elbow") ||
-      desc.includes("tee") ||
-      desc.includes("reducer") ||
-      desc.includes("bend") ||
-      desc.includes("fitting")
-    )
-      return "73079390";
-    if (
-      desc.includes("olet") ||
-      desc.includes("coupling") ||
-      desc.includes("swage") ||
-      desc.includes("nipple")
-    )
-      return "73079210";
-  }
-  if (desc.includes("flange")) return "73079190";
-  if (
-    desc.includes("fitting") ||
-    desc.includes("elbow") ||
-    desc.includes("tee") ||
-    desc.includes("reducer")
-  )
-    return "73079390";
-
-  // 2. Safe backend API proxy
+  // Safe backend API proxy
   try {
-    const res = await fetch("/api/search-and-get-hsn", {
+    const res = await fetchWithTimeout("/api/search-and-get-hsn", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify({ description }),
-    });
+    }, 20000);
 
     if (!res.ok) throw new Error("API call failed");
     const data = await res.json();
-    return data.result || "73079190";
+    return data.result || "";
   } catch (error) {
-    // Suppress error quietly and use local default
+    // Suppress error quietly
   }
 
-  return "73079190";
+  return "";
 }
 
 export async function editLineItemsWithAI(
@@ -561,11 +713,11 @@ export async function editLineItemsWithAI(
   docContext?: Record<string, any>
 ): Promise<{ items: LineItem[]; docUpdates?: Record<string, any>; explanation: string }> {
   try {
-    const res = await fetch("/api/edit-line-items", {
+    const res = await fetchWithTimeout("/api/edit-line-items", {
       method: "POST",
       headers: await getAuthHeaders(),
       body: JSON.stringify({ currentItems, userCommand, docType, currency, docContext }),
-    });
+    }, 180000);
 
     if (!res.ok) throw new Error("API call failed");
     const data = await res.json();
@@ -573,6 +725,15 @@ export async function editLineItemsWithAI(
 
     let processedItems = Array.isArray(result.items) ? result.items : currentItems;
     processedItems = postProcessDescriptionEdits(processedItems, userCommand);
+
+    // Ensure all numeric fields are safe and non-negative
+    processedItems = processedItems.map((item) => ({
+      ...item,
+      quantity: isNaN(item.quantity) || item.quantity <= 0 ? 1 : item.quantity,
+      rate: isNaN(item.rate) || item.rate < 0 ? 0 : item.rate,
+      taxRate: isNaN(item.taxRate) ? 18 : Math.max(0, Math.min(100, item.taxRate)),
+      unit: item.unit ? String(item.unit).trim().toUpperCase() : "NOS",
+    }));
 
     return {
       items: processedItems,
@@ -696,6 +857,37 @@ export async function smartGenerateMtcData(items: LineItem[]): Promise<LineItem[
     return {
       ...item,
       heatNo: item.heatNo || `HT-${(seed % 899999) + 100000}`,
+      c: getVal(0.02, 0.08),
+      mn: getVal(1.0, 2.0),
+      si: getVal(0.2, 0.75),
+      p: getVal(0.01, 0.04, 3),
+      s: getVal(0.005, 0.03, 3),
+      cr: descLower.includes("316") ? getVal(16.0, 18.0) : getVal(18.0, 20.0),
+      ni: descLower.includes("316") ? getVal(10.0, 14.0) : getVal(8.0, 10.5),
+      mo: descLower.includes("316") ? getVal(2.0, 3.0) : "0.00",
+      cu: "0.00",
+      n: "0.00",
+      v: "0.00",
+      w: "0.00",
+      ti: "0.00",
+      al: "0.00",
+      nb: "0.00",
+      co: "0.00",
+      fe: "Bal",
+      yieldStrength: "" + Math.round(205 + rand() * 100),
+      tensileStrength: "" + Math.round(515 + rand() * 150),
+      elongation: "" + Math.round(35 + rand() * 20),
+      reductionOfArea: "" + Math.round(50 + rand() * 20),
+      hardness: "" + Math.round(150 + rand() * 40) + " HBW",
+      impactTemp: "-196°C",
+      impactValues: "60, 65, 70",
+      impactAvg: "65 J",
+      microstructure: "Austenitic with no continuous carbide network",
+      grainSize: "ASTM 6-8",
+      inclusionRating: "Thin: <0.5, Thick: 0.0",
+      heatTreatment: "Solution Annealed @ 1050°C for 2h & Water Quenched",
+      materialGrade: item.materialGrade || detectedGrade,
+      standard: item.standard || "ASTM A182 / ASME SA182",
     };
   });
 }
