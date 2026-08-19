@@ -141,6 +141,9 @@ export const signInWithGoogleToken = async (idToken: string) => {
         authProvider: 'google',
         createdAt: serverTimestamp(),
         lastLoginAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp(),
+        lastLogin: new Date().toISOString(),
+        lastActive: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         trialExhausted: false,
         documentsRemaining: defaultRole === 'admin' ? 999999 : 5,
@@ -156,6 +159,9 @@ export const signInWithGoogleToken = async (idToken: string) => {
       const existingData = userDocSnap.data();
       const updates: Record<string, any> = {
         lastLoginAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp(),
+        lastLogin: new Date().toISOString(),
+        lastActive: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         displayName: displayName || existingData.displayName || "",
         photoURL: photoURL || existingData.photoURL || "",
@@ -327,6 +333,13 @@ export const handleEmailSignIn = async (email: string, pass: string) => {
         if (!userDocSnap.exists()) {
           await syncUserProfileToFirestore(user);
         } else {
+          await setDoc(userDocRef, {
+            lastLoginAt: serverTimestamp(),
+            lastActiveAt: serverTimestamp(),
+            lastLogin: new Date().toISOString(),
+            lastActive: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
           mergeLocalDataWithFirestore(user.uid, cleanEmail).catch(() => {});
         }
       } catch (e) {
@@ -452,6 +465,9 @@ export const syncUserProfileToFirestore = async (
         hasSeenWelcome: (isReReg || isExhausted) ? true : false,
         createdAt: serverTimestamp(),
         lastLoginAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp(),
+        lastLogin: new Date().toISOString(),
+        lastActive: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         history: [],
         savedCustomers: [],
@@ -485,6 +501,9 @@ export const syncUserProfileToFirestore = async (
         documentsRemaining: isPaid ? 999999 : (isExhausted ? 0 : remainingDocs),
         trialExhausted: isPaid ? false : isExhausted,
         lastLoginAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp(),
+        lastLogin: new Date().toISOString(),
+        lastActive: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 

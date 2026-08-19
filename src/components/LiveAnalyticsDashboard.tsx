@@ -60,6 +60,7 @@ import {
   calculateTokenCostINR,
 } from "../services/spendAnalyticsService";
 import { getCurrencySymbol, formatCurrencyAmount, convertInrToCurrency } from "../utils/localization";
+import { normalizeTimestampToMs } from "./AdminDashboard";
 
 interface LiveAnalyticsDashboardProps {
   registeredUsers?: any[];
@@ -149,12 +150,13 @@ export const LiveAnalyticsDashboard: React.FC<LiveAnalyticsDashboardProps> = ({
       const uEmailKey = (u.email || "").toLowerCase();
       const livePresence = presenceMap.get(uIdKey) || presenceMap.get(uEmailKey);
 
-      const lastActiveRaw = livePresence?.lastActiveAt || u.lastActiveAt || u.lastActive || u.lastSeen || u.createdAt;
-      const lastActiveTime = lastActiveRaw ? new Date(lastActiveRaw).getTime() : 0;
+      const lastActiveRaw = livePresence?.lastActiveAt || u.lastActiveAt || u.lastActive || u.lastLoginAt || u.lastLogin || u.lastSeen || u.updatedAt || u.createdAt;
+      const lastActiveTime = lastActiveRaw ? normalizeTimestampToMs(lastActiveRaw) : 0;
+      const createdAtTime = u.createdAt ? normalizeTimestampToMs(u.createdAt) : 0;
       
       const isOnline = livePresence?.isOnline || (lastActiveTime >= fiveMinutesAgo);
       const isChurned = (!lastActiveTime || lastActiveTime < sevenDaysAgo) && (u.documentsCount === 0 || !u.documentsCount);
-      const isDau = lastActiveTime >= (now - 24 * 60 * 60 * 1000);
+      const isDau = lastActiveTime >= (now - 24 * 60 * 60 * 1000) || (createdAtTime >= (now - 24 * 60 * 60 * 1000));
 
       const userDocs = u.documentsCount || (u.documents?.length || 0);
 

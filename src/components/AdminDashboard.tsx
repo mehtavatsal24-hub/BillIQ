@@ -81,56 +81,59 @@ interface AdminDashboardProps {
   currency?: string;
 }
 
-// Helper function to reliably normalize any timestamp/date input into a local YYYY-MM-DD string
-const toLocalDateString = (dateInput: any): string | null => {
+// Robust helper to safely parse any Date, Timestamp, Firestore Timestamp, ISO string or epoch ms
+export const normalizeToDate = (dateInput: any): Date | null => {
   if (!dateInput) return null;
-
-  // Handle epoch milliseconds or timestamp numbers
-  if (typeof dateInput === 'number' || (typeof dateInput === 'string' && /^\d+$/.test(dateInput.trim()))) {
-    const num = Number(dateInput);
-    if (!isNaN(num) && num > 0) {
-      const d = new Date(num);
-      if (!isNaN(d.getTime())) {
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-      }
+  if (dateInput instanceof Date) {
+    return isNaN(dateInput.getTime()) ? null : dateInput;
+  }
+  if (typeof dateInput === 'object' && dateInput !== null) {
+    if (typeof dateInput.toDate === 'function') {
+      try {
+        const d = dateInput.toDate();
+        if (d instanceof Date && !isNaN(d.getTime())) return d;
+      } catch {}
+    }
+    if (typeof dateInput.seconds === 'number') {
+      const d = new Date(dateInput.seconds * 1000);
+      if (!isNaN(d.getTime())) return d;
+    }
+    if (typeof dateInput._seconds === 'number') {
+      const d = new Date(dateInput._seconds * 1000);
+      if (!isNaN(d.getTime())) return d;
     }
   }
-
+  if (typeof dateInput === 'number') {
+    const d = new Date(dateInput);
+    return isNaN(d.getTime()) ? null : d;
+  }
   if (typeof dateInput === 'string') {
     const trimmed = dateInput.trim();
     if (!trimmed) return null;
-
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-      return trimmed;
+    if (/^\d+$/.test(trimmed)) {
+      const num = Number(trimmed);
+      const d = new Date(num);
+      if (!isNaN(d.getTime())) return d;
     }
-
-    if (trimmed.includes("T")) {
-      const datePart = trimmed.split("T")[0];
-      if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
-        return datePart;
-      }
-    }
-
     const d = new Date(trimmed);
-    if (!isNaN(d.getTime())) {
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    }
+    return isNaN(d.getTime()) ? null : d;
   }
-
-  if (dateInput instanceof Date && !isNaN(dateInput.getTime())) {
-    const year = dateInput.getFullYear();
-    const month = String(dateInput.getMonth() + 1).padStart(2, '0');
-    const day = String(dateInput.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-
   return null;
+};
+
+export const normalizeTimestampToMs = (dateInput: any): number => {
+  const d = normalizeToDate(dateInput);
+  return d ? d.getTime() : 0;
+};
+
+// Helper function to reliably normalize any timestamp/date input into a local YYYY-MM-DD string
+export const toLocalDateString = (dateInput: any): string | null => {
+  const d = normalizeToDate(dateInput);
+  if (!d) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 export const ADMIN_UID = "XssthfE8PHMi9j3iNMmCYQ9Sqgk2";
@@ -427,40 +430,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Fetch users on mount
+  // Fetch users on mount (combining Firestore cloud data with backend active store)
   const loadAllUsers = async () => {
     setLoadingUsers(true);
     try {
-      const cloudUsers = await getAllUsersFromCloud();
-      
-      // If Firestore users exist, use them. Merge with admin user if not present.
-      let combinedUsers = [...cloudUsers];
+      const [cloudResult, apiResult] = await Promise.allSettled([
+        getAllUsersFromCloud(),
+        fetch("/api/users").then((res) => (res.ok ? res.json() : null)).catch(() => null),
+      ]);
 
-      // If cloud is empty or missing sample accounts, attempt server endpoint fallback
-      if (combinedUsers.length === 0) {
-        try {
-          const res = await fetch("/api/users");
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data?.users) && data.users.length > 0) {
-              combinedUsers = data.users;
-            }
-          }
-        } catch (e) {
-          // ignore
+      const cloudUsers = cloudResult.status === "fulfilled" && Array.isArray(cloudResult.value) ? cloudResult.value : [];
+      const apiUsers = apiResult.status === "fulfilled" && Array.isArray(apiResult.value?.users) ? apiResult.value.users : [];
+
+      const mergedMap = new Map<string, any>();
+
+      // 1. First add backend API users
+      apiUsers.forEach((u: any) => {
+        const uEmail = getUserEmail(u).toLowerCase().trim();
+        const key = (uEmail || u.id || "").toLowerCase().trim();
+        if (key) {
+          mergedMap.set(key, { ...u, source: "backend" });
         }
-      }
+      });
+
+      // 2. Overlay Cloud Firestore users (higher fidelity source of truth)
+      cloudUsers.forEach((u: any) => {
+        const uEmail = getUserEmail(u).toLowerCase().trim();
+        const key = (uEmail || u.id || "").toLowerCase().trim();
+        if (key) {
+          const existing = mergedMap.get(key) || {};
+          mergedMap.set(key, { ...existing, ...u, source: "cloud" });
+        }
+      });
+
+      let deduplicatedUsers = Array.from(mergedMap.values());
 
       // If still empty, provide default accounts for inspection
-      if (combinedUsers.length === 0) {
+      if (deduplicatedUsers.length === 0) {
         const localDefaults = getDefaultUsers();
         if (localDefaults.length > 0) {
-          combinedUsers = localDefaults;
+          deduplicatedUsers = localDefaults;
         }
       }
 
-      if (combinedUsers.length === 0) {
-        combinedUsers = [
+      if (deduplicatedUsers.length === 0) {
+        deduplicatedUsers = [
           {
             id: ADMIN_UID,
             email: "mehtavatsal24@gmail.com",
@@ -503,19 +517,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           }
         ];
       }
-
-      // Deduplicate users list without force-overwriting any account
-      const seenKeys = new Set<string>();
-      const deduplicatedUsers: any[] = [];
-      combinedUsers.forEach((u) => {
-        const uEmail = getUserEmail(u).toLowerCase().trim();
-        const key = (uEmail || u.id || "").toLowerCase().trim();
-
-        if (key && !seenKeys.has(key)) {
-          seenKeys.add(key);
-          deduplicatedUsers.push(u);
-        }
-      });
 
       setUsersList(deduplicatedUsers);
       
@@ -666,11 +667,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }).length;
   }, [usersList, todayDateStr]);
 
-  // Sign-Ins / Logins of the Day (Users who signed in or visited today)
+  // Sign-Ins / Logins of the Day (Users who signed in, registered, or were active today)
   const signInsTodayCount = useMemo(() => {
     return usersList.filter((u) => {
-      const lastLogin = u.lastLoginAt || u.lastLogin || u.lastActiveAt || u.lastActive;
-      return lastLogin ? toLocalDateString(lastLogin) === todayDateStr : false;
+      const rawLogin = u.lastLoginAt || u.lastLogin;
+      const rawActive = u.lastActiveAt || u.lastActive || u.lastSeen || u.updatedAt;
+      const rawCreated = u.createdAt || u.registrationDate || u.created_at;
+
+      const isLoginToday = rawLogin ? toLocalDateString(rawLogin) === todayDateStr : false;
+      const isActiveToday = rawActive ? toLocalDateString(rawActive) === todayDateStr : false;
+      const isCreatedToday = rawCreated ? toLocalDateString(rawCreated) === todayDateStr : false;
+
+      return isLoginToday || isActiveToday || isCreatedToday;
     }).length;
   }, [usersList, todayDateStr]);
 
@@ -682,8 +690,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       let maxTime = 0;
       for (const ts of timestamps) {
         if (ts) {
-          const t = new Date(ts).getTime();
-          if (!isNaN(t) && t > maxTime) maxTime = t;
+          const t = normalizeTimestampToMs(ts);
+          if (t > maxTime) maxTime = t;
         }
       }
       return maxTime > 0 && maxTime < threeDaysAgoTime;
@@ -713,8 +721,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       let maxTime = 0;
       for (const ts of timestamps) {
         if (ts) {
-          const t = new Date(ts).getTime();
-          if (!isNaN(t) && t > maxTime) maxTime = t;
+          const t = normalizeTimestampToMs(ts);
+          if (t > maxTime) maxTime = t;
         }
       }
 
@@ -872,8 +880,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         });
       }
 
-      // Check Last Login Date
-      const rawLogin = u.lastLoginAt || u.lastLogin || u.lastActiveAt || u.lastActive;
+      // Check Last Login / Activity Date
+      const rawLogin = u.lastLoginAt || u.lastLogin || u.lastActiveAt || u.lastActive || u.lastSeen || u.updatedAt || u.createdAt;
       const loginDate = rawLogin ? toLocalDateString(rawLogin) : "";
       if (loginDate && targetDateSet.has(loginDate)) {
         signins.push({
@@ -1829,24 +1837,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const rawCreated = u.createdAt || u.registrationDate || u.created_at;
       const regDateStr = rawCreated ? toLocalDateString(rawCreated) : "";
       
-      const lastLogin = u.lastLoginAt || u.lastLogin || u.lastActiveAt || u.lastActive;
-      const loginDateStr = lastLogin ? toLocalDateString(lastLogin) : "";
+      const rawLastLogin = u.lastLoginAt || u.lastLogin;
+      const loginDateStr = rawLastLogin ? toLocalDateString(rawLastLogin) : "";
 
       const rawLastActive = u.lastActiveAt || u.lastActive || u.lastSeen || u.updatedAt || u.createdAt;
       const activeDateStr = rawLastActive ? toLocalDateString(rawLastActive) : "";
-      const lastActiveTime = rawLastActive ? new Date(rawLastActive).getTime() : 0;
+      const lastActiveTime = rawLastActive ? normalizeTimestampToMs(rawLastActive) : 0;
       const nowTime = Date.now();
 
       if (activityFilter === "signups_today") {
         if (regDateStr !== todayDateStr) return false;
       } else if (activityFilter === "signins_today") {
-        if (loginDateStr !== todayDateStr) return false;
+        if (loginDateStr !== todayDateStr && regDateStr !== todayDateStr && activeDateStr !== todayDateStr) return false;
       } else if (activityFilter === "online_now") {
         if (!u.isOnline && u.isOnline !== undefined) return false;
         const recentTime = Math.max(
-          u.lastSeen ? new Date(u.lastSeen).getTime() : 0,
-          u.lastActive ? new Date(u.lastActive).getTime() : 0,
-          u.lastActiveAt ? new Date(u.lastActiveAt).getTime() : 0
+          u.lastSeen ? normalizeTimestampToMs(u.lastSeen) : 0,
+          u.lastActive ? normalizeTimestampToMs(u.lastActive) : 0,
+          u.lastActiveAt ? normalizeTimestampToMs(u.lastActiveAt) : 0
         );
         if (nowTime - recentTime > 5 * 60 * 1000) return false;
       } else if (activityFilter === "active_today") {

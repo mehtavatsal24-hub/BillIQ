@@ -404,25 +404,170 @@ const getStorageKey = (key: string, userId?: string | null) => {
   return `billiq_user_guest_${key}`;
 };
 
-const VALID_ROUTES = ["dashboard", "analytics", "workspace", "invoice", "history", "customers", "suppliers", "profile", "privacy", "terms", "compliance", "admin", "landing", "features", "auth", "login", "signup"];
+const VALID_ROUTES = [
+  "dashboard", "overview", "analytics", "workspace", "invoice", "history", "invoices",
+  "customers", "suppliers", "contacts", "profile", "settings", "organization",
+  "privacy", "terms", "compliance", "cookie", "admin", "landing", "home", "features", "auth", "login", "signup", "signin"
+];
+
+export const normalizePathToRoute = (
+  pathname: string,
+  search?: string,
+  userId?: string | null
+): {
+  step: "dashboard" | "analytics" | "invoice" | "customers" | "suppliers" | "profile" | "history" | "privacy" | "terms" | "compliance" | "cookie";
+  showLanding: boolean;
+  showFeatures: boolean;
+  showAuthScreen: boolean;
+  isAdminConsoleActive: boolean;
+  authInitialSignUp: boolean;
+  canonicalPath: string;
+} => {
+  let path = (pathname || "/").toLowerCase().trim();
+  if (path.length > 1 && path.endsWith("/")) {
+    path = path.slice(0, -1);
+  }
+
+  // Check backward compatibility query parameters (e.g., ?view=dashboard or ?view=overview)
+  let queryView = "";
+  if (search) {
+    try {
+      const sp = new URLSearchParams(search);
+      queryView = (sp.get("view") || sp.get("route") || sp.get("tab") || sp.get("step") || "").toLowerCase().trim();
+    } catch {}
+  }
+
+  const rawKey = queryView || (path === "/" ? "" : path.replace(/^\//, ""));
+
+  let targetStep: "dashboard" | "analytics" | "invoice" | "customers" | "suppliers" | "profile" | "history" | "privacy" | "terms" | "compliance" | "cookie" = "dashboard";
+  let showLanding = false;
+  let showFeatures = false;
+  let showAuthScreen = false;
+  let isAdminConsoleActive = false;
+  let authInitialSignUp = false;
+  let canonicalPath = "/overview";
+
+  if (rawKey === "admin") {
+    isAdminConsoleActive = true;
+    canonicalPath = "/admin";
+  } else if (rawKey === "auth" || rawKey === "login" || rawKey === "signin") {
+    showAuthScreen = true;
+    authInitialSignUp = false;
+    canonicalPath = "/auth";
+  } else if (rawKey === "signup" || rawKey === "register") {
+    showAuthScreen = true;
+    authInitialSignUp = true;
+    canonicalPath = "/auth";
+  } else if (rawKey === "features") {
+    showFeatures = true;
+    canonicalPath = "/features";
+  } else if (rawKey === "home" || rawKey === "landing" || (!userId && (path === "/" || path === "/home" || path === "/landing"))) {
+    showLanding = true;
+    canonicalPath = "/";
+  } else if (rawKey === "invoices" || rawKey === "history" || rawKey === "documents") {
+    targetStep = "history";
+    canonicalPath = "/invoices";
+  } else if (rawKey === "contacts" || rawKey === "customers") {
+    targetStep = "customers";
+    canonicalPath = "/contacts";
+  } else if (rawKey === "suppliers" || rawKey === "vendors") {
+    targetStep = "suppliers";
+    canonicalPath = "/contacts";
+  } else if (rawKey === "settings" || rawKey === "profile" || rawKey === "organization") {
+    targetStep = "profile";
+    canonicalPath = "/settings";
+  } else if (rawKey === "workspace" || rawKey === "invoice" || rawKey === "create-invoice") {
+    targetStep = "invoice";
+    canonicalPath = "/workspace";
+  } else if (rawKey === "analytics") {
+    targetStep = "analytics";
+    canonicalPath = "/analytics";
+  } else if (rawKey === "privacy") {
+    targetStep = "privacy";
+    canonicalPath = "/privacy";
+  } else if (rawKey === "terms") {
+    targetStep = "terms";
+    canonicalPath = "/terms";
+  } else if (rawKey === "compliance") {
+    targetStep = "compliance";
+    canonicalPath = "/compliance";
+  } else if (rawKey === "cookie") {
+    targetStep = "cookie";
+    canonicalPath = "/cookie";
+  } else if (rawKey === "dashboard" || rawKey === "overview") {
+    targetStep = "dashboard";
+    canonicalPath = "/overview";
+  } else {
+    if (!userId && (path === "/" || path === "")) {
+      showLanding = true;
+      canonicalPath = "/";
+    } else {
+      targetStep = "dashboard";
+      canonicalPath = "/overview";
+    }
+  }
+
+  return {
+    step: targetStep,
+    showLanding,
+    showFeatures,
+    showAuthScreen,
+    isAdminConsoleActive,
+    authInitialSignUp,
+    canonicalPath,
+  };
+};
+
+export const getCanonicalPathForState = (
+  step: string,
+  showLanding: boolean,
+  showFeatures: boolean,
+  showAuthScreen: boolean,
+  isAdminConsoleActive: boolean,
+  isLoggedIn: boolean,
+  impersonatedUser: any
+): string => {
+  if (isAdminConsoleActive && !impersonatedUser) return "/admin";
+  if (showAuthScreen && !isLoggedIn) return "/auth";
+  if (showFeatures) return "/features";
+  if (showLanding && !isLoggedIn) return "/";
+
+  switch (step) {
+    case "dashboard":
+      return "/overview";
+    case "history":
+      return "/invoices";
+    case "customers":
+    case "suppliers":
+      return "/contacts";
+    case "profile":
+      return "/settings";
+    case "invoice":
+      return "/workspace";
+    case "analytics":
+      return "/analytics";
+    case "privacy":
+      return "/privacy";
+    case "terms":
+      return "/terms";
+    case "compliance":
+      return "/compliance";
+    case "cookie":
+      return "/cookie";
+    default:
+      return "/overview";
+  }
+};
 
 const getSavedRoute = (userId?: string | null): string | null => {
   try {
     if (typeof window !== "undefined" && window.location) {
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlView = urlParams.get("view") || urlParams.get("route") || urlParams.get("tab") || urlParams.get("step");
-      if (urlView) {
-        let normalized = urlView.toLowerCase().trim();
-        if (normalized === "documents") normalized = "history";
-        if (normalized === "workspace") normalized = "invoice";
-        if (normalized === "login" || normalized === "signup") normalized = "auth";
-        if (VALID_ROUTES.includes(normalized)) {
-          // If logged in, ignore "landing" or "auth" parameter in URL so refreshing stays in workspace
-          if (!(userId && (normalized === "landing" || normalized === "auth"))) {
-            return normalized;
-          }
-        }
-      }
+      const parsed = normalizePathToRoute(window.location.pathname, window.location.search, userId);
+      if (parsed.isAdminConsoleActive) return "admin";
+      if (parsed.showAuthScreen) return "auth";
+      if (parsed.showFeatures) return "features";
+      if (parsed.showLanding && !userId) return "landing";
+      return parsed.step;
     }
 
     if (userId) {
@@ -433,9 +578,12 @@ const getSavedRoute = (userId?: string | null): string | null => {
                         localStorage.getItem(`${userId}_active_app_step`);
       if (userRoute) {
         let normalized = userRoute.toLowerCase().trim();
-        if (normalized === "documents") normalized = "history";
-        if (normalized === "workspace") normalized = "invoice";
-        if (normalized === "login" || normalized === "signup") normalized = "auth";
+        if (normalized === "documents" || normalized === "invoices") normalized = "history";
+        if (normalized === "workspace" || normalized === "create-invoice") normalized = "invoice";
+        if (normalized === "overview") normalized = "dashboard";
+        if (normalized === "contacts") normalized = "customers";
+        if (normalized === "settings" || normalized === "organization") normalized = "profile";
+        if (normalized === "login" || normalized === "signup" || normalized === "signin") normalized = "auth";
         if (VALID_ROUTES.includes(normalized) && normalized !== "landing" && normalized !== "auth") return normalized;
       }
 
@@ -444,9 +592,12 @@ const getSavedRoute = (userId?: string | null): string | null => {
                           localStorage.getItem("active_app_step");
       if (globalRoute) {
         let normalized = globalRoute.toLowerCase().trim();
-        if (normalized === "documents") normalized = "history";
-        if (normalized === "workspace") normalized = "invoice";
-        if (normalized === "login" || normalized === "signup") normalized = "auth";
+        if (normalized === "documents" || normalized === "invoices") normalized = "history";
+        if (normalized === "workspace" || normalized === "create-invoice") normalized = "invoice";
+        if (normalized === "overview") normalized = "dashboard";
+        if (normalized === "contacts") normalized = "customers";
+        if (normalized === "settings" || normalized === "organization") normalized = "profile";
+        if (normalized === "login" || normalized === "signup" || normalized === "signin") normalized = "auth";
         if (VALID_ROUTES.includes(normalized) && normalized !== "landing" && normalized !== "auth") return normalized;
       }
     }
@@ -1016,36 +1167,42 @@ export default function App() {
   const [isFirstLoad, setIsFirstLoad] = useState(true);
   const [showLanding, setShowLanding] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlView = (urlParams.get("view") || urlParams.get("route") || "").toLowerCase().trim();
-      if (urlView === "auth" || urlView === "login" || urlView === "signup" || urlView === "features") return false;
+      const parsed = normalizePathToRoute(window.location.pathname, window.location.search, null);
+      if (parsed.showAuthScreen || parsed.showFeatures || parsed.isAdminConsoleActive) return false;
       const isLoggedIn = localStorage.getItem("billiq_is_logged_in") === "true";
       if (isLoggedIn) return false;
+      return parsed.showLanding;
     }
     return true;
   });
   const [showFeatures, setShowFeatures] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlView = (urlParams.get("view") || urlParams.get("route") || "").toLowerCase().trim();
-      return urlView === "features";
+      const parsed = normalizePathToRoute(window.location.pathname, window.location.search, null);
+      return parsed.showFeatures;
     }
     return false;
   });
   const [showAuthScreen, setShowAuthScreen] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlView = (urlParams.get("view") || urlParams.get("route") || "").toLowerCase().trim();
-      if (urlView === "auth" || urlView === "login" || urlView === "signup") {
-        return true;
-      }
+      const parsed = normalizePathToRoute(window.location.pathname, window.location.search, null);
+      return parsed.showAuthScreen;
     }
     return false;
   });
-  const [authInitialSignUp, setAuthInitialSignUp] = useState<boolean>(false);
+  const [authInitialSignUp, setAuthInitialSignUp] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const parsed = normalizePathToRoute(window.location.pathname, window.location.search, null);
+      return parsed.authInitialSignUp;
+    }
+    return false;
+  });
 
   // Admin & Impersonation state
   const [isAdminConsoleActive, setIsAdminConsoleActive] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const parsed = normalizePathToRoute(window.location.pathname, window.location.search, null);
+      if (parsed.isAdminConsoleActive) return true;
+    }
     const saved = getSavedRoute(null);
     return saved === "admin";
   });
@@ -1089,8 +1246,12 @@ export default function App() {
   // State
   const [step, setStep] = useState<"dashboard" | "analytics" | "invoice" | "customers" | "suppliers" | "profile" | "history" | "privacy" | "terms" | "compliance" | "cookie">(
     () => {
+      if (typeof window !== "undefined") {
+        const parsed = normalizePathToRoute(window.location.pathname, window.location.search, null);
+        if (parsed.step) return parsed.step;
+      }
       const saved = getSavedRoute(null);
-      if (saved && ["dashboard", "analytics", "invoice", "customers", "suppliers", "profile", "history", "privacy", "terms", "compliance"].includes(saved)) {
+      if (saved && ["dashboard", "analytics", "invoice", "customers", "suppliers", "profile", "history", "privacy", "terms", "compliance", "cookie"].includes(saved)) {
         return saved as any;
       }
       return "dashboard";
@@ -2709,12 +2870,12 @@ export default function App() {
         setShowFeatures(false);
         setIsAdminConsoleActive(false);
         setStep("invoice");
-      } else if (savedRoute === "history") {
+      } else if (savedRoute === "history" || savedRoute === "invoices") {
         setShowLanding(false);
         setShowFeatures(false);
         setIsAdminConsoleActive(false);
         setStep("history");
-      } else if (savedRoute === "customers") {
+      } else if (savedRoute === "customers" || savedRoute === "contacts") {
         setShowLanding(false);
         setShowFeatures(false);
         setIsAdminConsoleActive(false);
@@ -2724,7 +2885,7 @@ export default function App() {
         setShowFeatures(false);
         setIsAdminConsoleActive(false);
         setStep("suppliers");
-      } else if (savedRoute === "profile") {
+      } else if (savedRoute === "profile" || savedRoute === "settings" || savedRoute === "organization") {
         setShowLanding(false);
         setShowFeatures(false);
         setIsAdminConsoleActive(false);
@@ -2744,7 +2905,7 @@ export default function App() {
         setShowFeatures(false);
         setIsAdminConsoleActive(false);
         setStep("compliance");
-      } else if (savedRoute === "dashboard") {
+      } else if (savedRoute === "dashboard" || savedRoute === "overview") {
         setShowLanding(false);
         setShowFeatures(false);
         setIsAdminConsoleActive(false);
@@ -2761,18 +2922,22 @@ export default function App() {
         }
       }
     } else {
-      // Unauthenticated Visitor: Strictly show Landing page by default unless URL specifies auth or features
-      const urlParams = typeof window !== "undefined" && window.location ? new URLSearchParams(window.location.search) : null;
-      const urlView = (urlParams?.get("view") || urlParams?.get("route") || "").toLowerCase().trim();
-
-      if (urlView === "auth" || urlView === "login" || urlView === "signup") {
+      // Unauthenticated Visitor: Strictly route based on path and query parameters
+      const parsed = typeof window !== "undefined" && window.location ? normalizePathToRoute(window.location.pathname, window.location.search, null) : null;
+      if (parsed?.showAuthScreen) {
         setShowFeatures(false);
         setShowLanding(false);
         setShowAuthScreen(true);
-      } else if (urlView === "features") {
+        setAuthInitialSignUp(parsed.authInitialSignUp);
+      } else if (parsed?.showFeatures) {
         setShowFeatures(true);
         setShowLanding(false);
         setShowAuthScreen(false);
+      } else if (parsed?.step === "privacy" || parsed?.step === "terms" || parsed?.step === "compliance" || parsed?.step === "cookie") {
+        setShowFeatures(false);
+        setShowAuthScreen(false);
+        setShowLanding(false);
+        setStep(parsed.step);
       } else {
         setShowFeatures(false);
         setShowAuthScreen(false);
@@ -4126,7 +4291,24 @@ export default function App() {
     }
   }, [lastExportTimestamp, isFirstLoad]);
 
-  // Persist active view route whenever it changes and sync with URL
+  // Browser History (Back / Forward) Navigation Sync via popstate
+  useEffect(() => {
+    const handlePopState = () => {
+      if (typeof window === "undefined" || !window.location) return;
+      const parsed = normalizePathToRoute(window.location.pathname, window.location.search, user?.uid);
+      setShowLanding(parsed.showLanding);
+      setShowFeatures(parsed.showFeatures);
+      setShowAuthScreen(parsed.showAuthScreen);
+      setAuthInitialSignUp(parsed.authInitialSignUp);
+      setIsAdminConsoleActive(parsed.isAdminConsoleActive);
+      setStep(parsed.step);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [user?.uid]);
+
+  // Persist active view route whenever it changes and sync with clean URL paths
   useEffect(() => {
     if (authLoading || isFirstLoad) return;
 
@@ -4145,6 +4327,52 @@ export default function App() {
       currentRoute = step;
     }
 
+    const canonicalPath = getCanonicalPathForState(
+      step,
+      showLanding,
+      showFeatures,
+      showAuthScreen,
+      isAdminConsoleActive,
+      !!user,
+      impersonatedUser
+    );
+
+    // Set professional enterprise document title
+    let pageTitle = "BillIQ | Global Billing & Compliance Suite";
+    if (isAdminConsoleActive && !impersonatedUser) {
+      pageTitle = "Admin Console | BillIQ";
+    } else if (showAuthScreen && !user) {
+      pageTitle = authInitialSignUp ? "Create Account | BillIQ" : "Sign In | BillIQ";
+    } else if (showFeatures) {
+      pageTitle = "Features & Capabilities | BillIQ";
+    } else if (showLanding && !user) {
+      pageTitle = "BillIQ | Global Billing & Compliance Suite";
+    } else if (step === "dashboard") {
+      pageTitle = "Overview — BillIQ Workspace";
+    } else if (step === "history") {
+      pageTitle = "Invoices & Estimates | BillIQ";
+    } else if (step === "customers" || step === "suppliers") {
+      pageTitle = "Contacts Directory | BillIQ";
+    } else if (step === "profile") {
+      pageTitle = "Account & Organization Settings | BillIQ";
+    } else if (step === "invoice") {
+      pageTitle = "+ Create Invoice | BillIQ Workspace";
+    } else if (step === "analytics") {
+      pageTitle = "Live Analytics | BillIQ";
+    } else if (step === "privacy") {
+      pageTitle = "Privacy Policy | BillIQ";
+    } else if (step === "terms") {
+      pageTitle = "Terms & Conditions | BillIQ";
+    } else if (step === "compliance") {
+      pageTitle = "Tax Compliance | BillIQ";
+    } else if (step === "cookie") {
+      pageTitle = "Cookie Policy | BillIQ";
+    }
+
+    if (typeof document !== "undefined") {
+      document.title = pageTitle;
+    }
+
     try {
       localStorage.setItem("active_app_route", currentRoute);
       localStorage.setItem("active_app_step", step);
@@ -4157,16 +4385,18 @@ export default function App() {
       }
 
       if (typeof window !== "undefined" && window.location) {
-        const url = new URL(window.location.href);
-        if (url.searchParams.get("view") !== currentRoute) {
-          url.searchParams.set("view", currentRoute);
-          window.history.replaceState({}, "", url.toString());
+        const currentPath = window.location.pathname;
+        const currentSearch = window.location.search;
+
+        // Cleanly rewrite URL bar to standard paths (/overview, /invoices, etc.) and remove ?view= query params
+        if (currentSearch || currentPath !== canonicalPath) {
+          window.history.replaceState({}, "", canonicalPath);
         }
       }
     } catch (e) {
       console.error("Error persisting view route:", e);
     }
-  }, [step, showLanding, showFeatures, showAuthScreen, isAdminConsoleActive, user, authLoading, isFirstLoad, impersonatedUser]);
+  }, [step, showLanding, showFeatures, showAuthScreen, authInitialSignUp, isAdminConsoleActive, user, userProfile, authLoading, isFirstLoad, impersonatedUser]);
 
   // Calculations
   const handleBusinessChange = async (updates: Partial<BusinessDetails>) => {

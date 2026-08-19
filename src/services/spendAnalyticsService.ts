@@ -38,6 +38,41 @@ export interface UserPresence {
   totalDocuments?: number;
 }
 
+export const safeTimestampToMs = (dateInput: any): number => {
+  if (!dateInput) return 0;
+  if (dateInput instanceof Date) {
+    return isNaN(dateInput.getTime()) ? 0 : dateInput.getTime();
+  }
+  if (typeof dateInput === 'object' && dateInput !== null) {
+    if (typeof dateInput.toDate === 'function') {
+      try {
+        const d = dateInput.toDate();
+        if (d instanceof Date && !isNaN(d.getTime())) return d.getTime();
+      } catch {}
+    }
+    if (typeof dateInput.seconds === 'number') {
+      return dateInput.seconds * 1000;
+    }
+    if (typeof dateInput._seconds === 'number') {
+      return dateInput._seconds * 1000;
+    }
+  }
+  if (typeof dateInput === 'number') {
+    return isNaN(dateInput) ? 0 : dateInput;
+  }
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    if (!trimmed) return 0;
+    if (/^\d+$/.test(trimmed)) {
+      const num = Number(trimmed);
+      return isNaN(num) ? 0 : num;
+    }
+    const d = new Date(trimmed);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+  return 0;
+};
+
 export interface SpendMetrics {
   totalSpendInr: number;
   todaySpendInr: number;
@@ -572,9 +607,9 @@ export function computeSpendIntelligence({
     const aiScans = (userAiCountMap.get(uKeyId) || 0) + (userAiCountMap.get(uKeyEmail) || 0);
     const docs = u.documentsCount || (u.documents?.length || 0) || Math.floor(spend / 0.15);
 
-    const lastActive = u.lastActiveAt || u.lastActive || u.lastSeen || u.createdAt || new Date().toISOString();
-    const lastActiveTime = new Date(lastActive).getTime();
-    const isOnline = u.isOnline === true || (!isNaN(lastActiveTime) && lastActiveTime >= fiveMinutesAgo);
+    const lastActive = u.lastActiveAt || u.lastActive || u.lastLoginAt || u.lastLogin || u.lastSeen || u.updatedAt || u.createdAt || new Date().toISOString();
+    const lastActiveTime = safeTimestampToMs(lastActive);
+    const isOnline = u.isOnline === true || (lastActiveTime > 0 && lastActiveTime >= fiveMinutesAgo);
 
     return {
       userId: u.id || "usr_" + Math.random().toString(36).substring(2, 7),
