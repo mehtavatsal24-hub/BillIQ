@@ -20,7 +20,16 @@ export const Logo: React.FC<LogoProps> = ({
   onClick,
   showIconOnly = false,
 }) => {
+  const [imgSrc, setImgSrc] = useState<string>("/logo.svg");
   const [imgError, setImgError] = useState(false);
+
+  const handleImgError = () => {
+    if (imgSrc === "/logo.svg") {
+      setImgSrc("/logo.png");
+    } else {
+      setImgError(true);
+    }
+  };
 
   const containerSizes = {
     sm: "h-7 w-7 rounded-lg",
@@ -77,10 +86,13 @@ export const Logo: React.FC<LogoProps> = ({
       <div className={`relative flex items-center justify-center overflow-hidden shrink-0 transition-transform duration-200 group-hover:scale-105 ${containerSizes[size]} ${badgeGradients[variant]}`}>
         {!imgError ? (
           <img
-            src="/logo.svg"
+            src={imgSrc}
             alt="BillIQ Logo"
             className="w-full h-full object-cover"
-            onError={() => setImgError(true)}
+            loading="eager"
+            decoding="async"
+            referrerPolicy="no-referrer"
+            onError={handleImgError}
           />
         ) : (
           <div className="flex items-center justify-center w-full h-full relative">
