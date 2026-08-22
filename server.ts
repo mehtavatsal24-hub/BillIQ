@@ -384,30 +384,21 @@ function safeJSONParse(text: string, fallback: any = {}): any {
   return fallback;
 }
 
-// Security Headers
+// Security Headers - Permit iframe preview embedding and avoid blocking iframe rendering
 app.use(
   helmet({
     contentSecurityPolicy: false,
     crossOriginResourcePolicy: false,
+    crossOriginOpenerPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    frameguard: false,
   })
 );
 
-// Restrict CORS Policy
-const allowedDomain = process.env.ALLOWED_DOMAIN || process.env.APP_URL || "";
+// Flexible CORS Policy for Preview Iframe & Custom Domains
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (
-        (allowedDomain && origin === allowedDomain) ||
-        origin.endsWith(".run.app") ||
-        origin.includes("localhost") ||
-        origin.includes("127.0.0.1")
-      ) {
-        return callback(null, true);
-      }
-      return callback(new Error("CORS policy violation: Access denied from this origin."));
-    },
+    origin: true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -2185,6 +2176,106 @@ function sanitizeExtractedDescription(description: string): string {
     .trim();
 }
 
+// Fallback line item parser when AI quota is exhausted or model is offline
+function fallbackExtractLinesFromText(text: string): { itemCount: number; products: any[]; customer?: any } {
+  if (!text) return { itemCount: 0, products: [] };
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const products: any[] = [];
+  let customer: any = {};
+
+  const uomRegex = /\b(NOS|PCS|KGS|KG|MTR|MTRS|SET|SETS|BOX|BOXES|LITERS|LITER|LTR|TONS|TON|PKT|BAG|BAGS|EA|FEET|FT|INCH|SQM|SQF|CBM|CFT|HRS|JOB)\b/i;
+
+  for (const line of lines) {
+    // Check for customer email, phone, gstin, name
+    const gstinMatch = line.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z0-9]{1}[Z]{1}[A-Z0-9]{1}\b/i);
+    if (gstinMatch && !customer.gstin) customer.gstin = gstinMatch[0].toUpperCase();
+
+    const emailMatch = line.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/);
+    if (emailMatch && !customer.email) customer.email = emailMatch[0].toLowerCase();
+
+    const phoneMatch = line.match(/(?:\+91[\-\s]?)?[6789]\d{9}\b/);
+    if (phoneMatch && !customer.phone) customer.phone = phoneMatch[0];
+
+    const customerNameMatch = line.match(/^(?:M\/s\.?|Customer|Buyer|To|Party|Bill To)\s*:\s*([A-Za-z0-9\s.,&'-]{3,50})/i);
+    if (customerNameMatch && !customer.name) {
+      customer.name = customerNameMatch[1].trim();
+    }
+
+    // Skip header-only lines
+    if (/^(s\.?no|sr|item|description|particulars|qty|rate|amount|price|hsn|total|tax|gst)\b/i.test(line) && !line.match(/\d{2,}/)) {
+      continue;
+    }
+
+    // Check if line contains CSV / tab / pipe separated line item
+    if (line.includes(",") || line.includes("\t") || line.includes("|")) {
+      const parts = line.split(/[,\t|]/).map(p => p.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        let name = "";
+        let qty = 1;
+        let rate = 0;
+        let hsn = "";
+        let unit = "NOS";
+
+        for (const part of parts) {
+          const num = parseFloat(part.replace(/,/g, ""));
+          if (/^\d{6,8}$/.test(part)) {
+            hsn = part;
+          } else if (uomRegex.test(part)) {
+            const m = part.match(uomRegex);
+            if (m) unit = m[1].toUpperCase();
+          } else if (!isNaN(num) && num > 0 && qty === 1 && !name) {
+            // potential index/sno
+          } else if (!isNaN(num) && num > 0 && qty === 1) {
+            qty = num;
+          } else if (!isNaN(num) && num > 0) {
+            rate = num;
+          } else if (part.length > 2 && !/^(item|qty|rate|amount|price|description|hsn|total|s\.no|sr)$/i.test(part)) {
+            name = name ? `${name} ${part}` : part;
+          }
+        }
+        if (name && name.length > 2) {
+          products.push({
+            name: sanitizeExtractedDescription(name),
+            quantity: qty || 1,
+            rate: rate || 0,
+            hsn: hsn || "84818030",
+            suggestedTaxRate: 18,
+            unit: unit || "NOS",
+          });
+        }
+      }
+    } else {
+      // Try space-separated structured line parsing
+      // e.g.: "1 SS 304 Flange 2 Inch 150# SORF 10 NOS 1500 84818030"
+      const match = line.match(/^(\d+[\.\)]\s+)?([A-Za-z0-9\s\-\#\.\/\"\'\(\)\+\@]+?)\s+(\d+(?:\.\d+)?)\s*(NOS|PCS|KGS|MTR|MTRS|SET|BOX|LITERS|LTR|TONS|PKT|BAG|EA)?\s*(?:(?:@|Rs\.?|INR)?\s*(\d+(?:\.\d+)?))?(?:\s+(\d{6,8}))?$/i);
+      if (match) {
+        const namePart = match[2]?.trim();
+        const qtyPart = parseFloat(match[3]);
+        const unitPart = match[4]?.toUpperCase() || "NOS";
+        const ratePart = match[5] ? parseFloat(match[5]) : 0;
+        const hsnPart = match[6] || "";
+
+        if (namePart && namePart.length >= 3 && !/^(subtotal|total|grand total|taxable amount|round off|cgst|sgst|igst)$/i.test(namePart)) {
+          products.push({
+            name: sanitizeExtractedDescription(namePart),
+            quantity: isNaN(qtyPart) || qtyPart <= 0 ? 1 : qtyPart,
+            rate: isNaN(ratePart) || ratePart < 0 ? 0 : ratePart,
+            hsn: hsnPart || "84818030",
+            suggestedTaxRate: 18,
+            unit: unitPart || "NOS",
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    itemCount: products.length,
+    products,
+    customer: Object.keys(customer).length > 0 ? customer : undefined,
+  };
+}
+
 // 6. Analyze Document
 app.post("/api/analyze-document", async (req, res) => {
   try {
@@ -2196,37 +2287,53 @@ app.post("/api/analyze-document", async (req, res) => {
     const { extractedText, fileContent, mimeType, industry, businessName } = req.body;
 
     const ai = getGenAI();
-    const systemInstruction = `You are an expert AI Document Specialist and OCR Parser for an industrial business: ${businessName || "Industrial"} (${industry || "Industrial"}).
-Analyze the provided document (Purchase Order, Invoice, Quotation, Manifest, or RFQ).
+    const systemInstruction = `You are an expert AI Document Specialist and OCR Parser supporting all industries (Manufacturing, Metals & Engineering, Chemicals, Pharmaceuticals, Textiles, Food & Beverages, Agriculture, FMCG, Electronics & Electricals, Hardware, Construction, Automotive, Logistics, Services, Packaging, etc.) for: ${businessName || "Enterprise"} (${industry || "General / Multi-Industry"}).
+Analyze the provided document (Purchase Order, Invoice, Quotation, Manifest, Delivery Challan, Packing List, or RFQ).
 
-CRITICAL HIGH-CAPACITY EXTRACTION MANDATES:
+CRITICAL EXTRACTION & CLASSIFICATION MANDATES:
 1. **EXTRACT EVERY SINGLE LINE ITEM WITHOUT EXCEPTION**:
-   - The document may contain dozens or hundreds of items (50 to 200+ line items across multi-page tables).
-   - You MUST extract EVERY SINGLE ROW in full without omitting, skipping, summarizing, or using ellipses (...).
+   - Extract EVERY SINGLE ROW in full without omitting, skipping, summarizing, or using ellipses (...).
    - Process every table, page, and annexure systematically from first to last item.
 
 2. **NO AGGREGATION OR GROUPING**:
-   - Every individual line item row in the document must correspond to an entry in the "products" array.
+   - Every individual line item row in the document must correspond to a distinct entry in the "products" array.
 
 3. **COUNT VERIFICATION**:
    - Count the total number of line items found and return it accurately in "itemCount".
 
-4. **ACCURATE 8-DIGIT HSN/ITC(HS) CLASSIFICATION**:
-   - Determine precise 8-digit or 6-digit HSN codes for each product.
+4. **STRICT 8-DIGIT HSN/ITC(HS) RESOLUTION ACROSS ALL INDUSTRIES**:
+   - Provide an exact 8-digit Indian ITC(HS) classification HSN code for each product/service appropriate to its industry.
+   - Never output generic, short (2-digit or 4-digit), or placeholder HSN codes.
+   - Example industry-specific standard classifications:
+     * Chemicals & Petrochemicals: Chemical compounds, reagents, polymers (e.g. 28xx, 29xx, 38xx series)
+     * Pharma & Medical: Formulations, bulk drugs, surgicals (e.g. 30xx series)
+     * Food, Oils & Agriculture: Grains, spices, dairy, beverages, oils (e.g. 04xx, 07xx, 09xx, 15xx, 22xx)
+     * Textiles & Apparel: Yarns, woven fabrics, garments (e.g. 52xx, 54xx, 61xx, 62xx)
+     * Electricals & Electronics: Cables, transformers, chips, circuits, appliances (e.g. 84xx, 85xx)
+     * Metals, Pipes & Flanges: SA105/A105N (73079190), SS Flanges (73072100), Butt-weld fittings (73079390, 73072300), Pipes (73045930, 73044100), Plates/Sheets (72xx series)
+     * Machinery & Tools: Pumps, valves, motors, bearings, hand tools (e.g. 82xx, 84xx)
+   - HSN must contain exactly 8 numeric digits. Do not output SAC codes unless it is purely a service.
 
-5. **FULL PRODUCT NAME & COMPLETE SPECIFICATIONS (CRITICAL)**:
-   - The "name" field MUST capture the complete material description along with ALL associated technical details, grades, specifications, standards, CAS numbers, dimensions, schedule, pressure ratings, and packaging requirements found in the document for that line item.
-   - Format: "Product Name | Specs / Grade / Size | Packaging Details"
-   - EXCLUDE delivery terms or incoterms (e.g. '| Delivery: 4 weeks', '| Incoterm: CIF') from the "name" field unless explicitly requested.
+5. **PRODUCT PURITY & COMPLETE SPECIFICATIONS**:
+   - "name": Full exact technical or commercial product description (grade, model, size, specification, rating, formulation, type). Do NOT include bank details, general payment clauses, delivery lead times, or general notes inside product names.
+   - EXCLUDE delivery terms or incoterms (e.g. '| Delivery: 4 weeks', '| Incoterm: CIF') from the "name" field.
 
-6. **ACCURATE QUANTITY AND UOM / UNIT**:
-   - "quantity": Extract exact numerical value (e.g. 5600 for "5,600 Kg", 272 for "272 Drums", 1100 for "1,100 Kg"). Carefully parse numbers with commas.
-   - "unit": Normalize Unit of Measure (UOM): DRM, KGS, TONS, MTR, PCS, NOS, SET, BOX, PKT, LTR, BAG, CAN, ROL, SQM, etc.
+6. **ACCURATE QUANTITY AND EXACT UOM / UNIT OF MEASURE**:
+   - "quantity": Extract exact numerical quantity value. Default to 1 if not stated.
+   - "unit": Extract the EXACT Unit of Measure (UOM) stated in the document row/column. Preserve the specific measurement unit directly from the document. Examples:
+     * Volume/Liquids: LITERS, LTR, ML, GALLONS, BTL, CAN, DRM, BARRELS
+     * Weight/Mass: KGS, GRAMS, TONS, QUINTAL, LBS
+     * Length/Area/Dimension: MTR, METERS, FEET, INCH, SQM, SQF, CBM, CFT
+     * Count/Packaging: NOS, PCS, SET, BOX, CTN, PKT, BAG, BUNDLE, DOZ, PAIRS, LOT
+     * Service/Time: HRS, DAY, JOB, SRV
+     If the document states "Liters" or "Ltr", output "LITERS" or "LTR". If no unit is mentioned, default to "NOS" or "PCS".
+   - "rate": Numerical unit price. If not present, default to 0.
+   - "suggestedTaxRate": GST percentage (e.g. 28, 18, 12, 5, 0).
 
 7. **CUSTOMER / BUYER DATA**:
-   - Identify buyer/customer name, GSTIN, address, email, phone, and contact person details.
+   - Extract buyer/customer Name, GSTIN, Address, Phone, Email, and Contact Person details if available.
 
-Return a JSON object in the specified schema.`;
+Return a JSON object matching the response schema.`;
 
     let contentsPayload: any[];
     if (extractedText) {
@@ -2307,10 +2414,24 @@ Return a JSON object in the specified schema.`;
   } catch (err: any) {
     console.error("Backend analyze-document error:", err?.message || err);
     const errStr = String(err?.message || err);
+
+    // Fallback: If text was extracted from file (e.g. spreadsheet, word doc, text file), salvage rows even if AI service quota is exhausted
+    const { extractedText } = req.body || {};
+    if (extractedText && typeof extractedText === "string") {
+      const fallbackData = fallbackExtractLinesFromText(extractedText);
+      if (fallbackData.products.length > 0) {
+        console.log(`[Document Parse Fallback]: Successfully extracted ${fallbackData.products.length} line items via tabular parser.`);
+        return res.json({ result: fallbackData });
+      }
+    }
+
+    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("credits") || errStr.includes("quota")) {
+      return res.status(429).json({ error: "Your Gemini API credits or quota are currently exhausted. Please update your billing at AI Studio or import line items via CSV/Excel." });
+    }
     if (errStr.includes("503") || errStr.includes("UNAVAILABLE") || errStr.includes("high demand") || errStr.includes("spikes in demand")) {
       return res.status(503).json({ error: "The AI service is experiencing temporary high demand from the provider. Please try again in a few moments." });
     }
-    return res.status(500).json({ error: "Document analysis failed." });
+    return res.status(500).json({ error: "Document analysis failed. Please verify the document format or enter items manually." });
   }
 });
 
@@ -2323,15 +2444,20 @@ app.post("/api/analyze-text-content", async (req, res) => {
     }
 
     const ai = getGenAI();
-    const systemInstruction = `You are an expert AI Data Specialist for an industrial business: ${businessName || "Industrial"} (${industry || "Industrial"}).
-Analyze the provided text (Purchase Order content, RFQ, or email).
+    const systemInstruction = `You are an expert AI Data Specialist supporting all industries (Manufacturing, Metals & Engineering, Chemicals, Pharmaceuticals, Textiles, Food & Beverages, Agriculture, FMCG, Electronics, Hardware, Construction, Automotive, Logistics, Services, etc.) for: ${businessName || "Enterprise"} (${industry || "General / Multi-Industry"}).
+Analyze the provided text (Purchase Order content, RFQ, WhatsApp order, email, or invoice text).
 Extract ALL line items and customer details without exception.
 
 CRITICAL EXTRACTION RULES:
-1. **FULL PRODUCT NAME & SPECIFICATION**: The "name" field MUST capture complete material descriptions along with specifications, grades, standards, CAS numbers, dimensions, and packaging requirements (e.g. "Maleic Anhydride | CAS: 108-31-6 | Grade: Briquettes / Pure 99.5% | Packaging: 25 Kg Bags").
-2. **ACCURATE QUANTITY & UOM**: Carefully parse comma-separated quantities (e.g. "5,600" is 5600) and normalize UOM (DRM, KGS, TONS, MTR, PCS, BAG, CAN, BOX, NOS, etc.).
-3. **8-DIGIT HSN**: Determine 8-digit ITC(HS) codes.
-4. **EXCLUDE DELIVERY & INCOTERMS FROM PRODUCT NAME**: Do NOT include delivery lead times, delivery terms, or incoterms (e.g. 'Delivery: 7-10 weeks', 'Incoterm: CIF') in the product 'name' field unless explicitly requested.`;
+1. **EXTRACT EVERY SINGLE LINE ITEM**: Do not skip, group, or summarize any item.
+2. **STRICT 8-DIGIT HSN/ITC(HS) RESOLUTION ACROSS ALL INDUSTRIES**:
+   - Provide an exact 8-digit Indian ITC(HS) classification HSN code for each product appropriate to its industry.
+   - Never output generic, short, or placeholder HSN codes.
+   - HSN must contain exactly 8 numeric digits. Do not output SAC codes unless it is purely a service.
+3. **PRODUCT PURITY**:
+   - "name": Full exact technical or commercial product description (grade, model, size, specification, rating, formulation, type). Do NOT include bank details, general terms, payment clauses, delivery lead times, or general notes.
+4. **ACCURATE QUANTITY & EXACT UOM**:
+   - Carefully parse exact quantities and extract the EXACT Unit of Measure (UOM) as stated in the text (e.g. LITERS, LTR, ML, GALLONS, KGS, GRAMS, TONS, QUINTAL, MTR, METERS, FEET, INCH, SQM, SQF, CBM, CFT, NOS, PCS, SET, BOX, CTN, PKT, BAG, DRM, CAN, BTL, DOZ, PAIRS, HRS, DAY, JOB, SRV, LOT). If text says "Liters", extract "LITERS".`;
 
     const response = await callWithRetry((model) =>
       ai.models.generateContent({
@@ -2393,6 +2519,20 @@ CRITICAL EXTRACTION RULES:
   } catch (err: any) {
     console.error("Backend analyze-text-content error:", err?.message || err);
     const errStr = String(err?.message || err);
+
+    // Fallback: Attempt offline text line-item extraction
+    const { text } = req.body || {};
+    if (text && typeof text === "string") {
+      const fallbackData = fallbackExtractLinesFromText(text);
+      if (fallbackData.products.length > 0) {
+        console.log(`[Text Parse Fallback]: Successfully extracted ${fallbackData.products.length} line items.`);
+        return res.json({ result: fallbackData });
+      }
+    }
+
+    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("credits") || errStr.includes("quota")) {
+      return res.status(429).json({ error: "Your Gemini API credits or quota are currently exhausted. Please update your billing at AI Studio or enter line items manually." });
+    }
     if (errStr.includes("503") || errStr.includes("UNAVAILABLE") || errStr.includes("high demand") || errStr.includes("spikes in demand")) {
       return res.status(503).json({ error: "The AI service is experiencing temporary high demand from the provider. Please try again in a few moments." });
     }
