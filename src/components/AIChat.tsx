@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Send, User, Loader2, X, MessageSquare, Zap } from "lucide-react";
 import Markdown from "react-markdown";
 import { DocumentHistoryItem, PriceHistoryItem, SavedCustomer, SavedSupplier, LineItem, CustomerDetails, DocumentType, BusinessDetails } from "../types";
-import { auth } from "../services/firebase";
+import { auth } from "../services/auth";
 
 interface Message {
   role: "user" | "assistant";

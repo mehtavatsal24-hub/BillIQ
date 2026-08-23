@@ -27,9 +27,7 @@ const shouldSuppress = (...args: any[]) => {
            lower.includes("failed to call the gemini api") ||
            lower.includes("internal assertion failed") ||
            lower.includes("unexpected state") ||
-           lower.includes("@firebase/firestore") ||
            lower.includes("websocket closed without opened") ||
-           lower.includes("could not reach cloud firestore backend") ||
            lower.includes("code=unavailable");
   } catch {
     return false;

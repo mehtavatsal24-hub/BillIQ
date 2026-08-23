@@ -1,5 +1,4 @@
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from './firebase';
+import { getAllUsersFromCloud } from './dbService';
 import { getDefaultUsers } from '../data/dataLoader';
 
 export interface EmailTriggerResult {
@@ -70,14 +69,9 @@ export async function sendFeedbackRequestEmails(): Promise<EmailTriggerResult> {
     let usersList: any[] = [];
 
     try {
-      if (db) {
-        const usersSnap = await getDocs(collection(db, "users"));
-        usersSnap.forEach((doc) => {
-          usersList.push({ id: doc.id, ...doc.data() });
-        });
-      }
+      usersList = await getAllUsersFromCloud();
     } catch (e) {
-      console.warn("Notice: Firestore fetch in sendFeedbackRequestEmails fallback to API:", e);
+      console.warn("Notice: fetch in sendFeedbackRequestEmails fallback to API:", e);
     }
 
     if (usersList.length === 0) {
@@ -137,14 +131,9 @@ export async function sendInactivityReminders(): Promise<EmailTriggerResult> {
     let usersList: any[] = [];
 
     try {
-      if (db) {
-        const usersSnap = await getDocs(collection(db, "users"));
-        usersSnap.forEach((doc) => {
-          usersList.push({ id: doc.id, ...doc.data() });
-        });
-      }
+      usersList = await getAllUsersFromCloud();
     } catch (e) {
-      console.warn("Notice: Firestore fetch in sendInactivityReminders fallback to API:", e);
+      console.warn("Notice: fetch in sendInactivityReminders fallback to API:", e);
     }
 
     if (usersList.length === 0) {

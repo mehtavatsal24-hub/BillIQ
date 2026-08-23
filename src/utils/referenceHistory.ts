@@ -1,4 +1,4 @@
-import { auth } from "../services/firebase";
+import { auth } from "../services/auth";
 
 export function getActiveUserId(userId?: string | null): string | null {
   if (userId && typeof userId === "string" && userId.trim()) {

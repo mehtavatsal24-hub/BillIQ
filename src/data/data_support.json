@@ -37,5 +37,18 @@
     "message": "Need help exporting CSV invoices for the Scranton branch.",
     "recipient": "support@billiq.site",
     "createdAt": "2026-08-15T14:00:01.168Z"
+  },
+  {
+    "id": "sup_64a0k50sx",
+    "name": "vatsal",
+    "email": "mehtavatsal24@gmail.com",
+    "phone": "",
+    "company": "",
+    "userId": "",
+    "topic": "General Support",
+    "subject": "Contact Support Inquiry",
+    "message": "hi",
+    "recipient": "support@billiq.site",
+    "createdAt": "2026-08-23T09:01:13.780Z"
   }
 ]

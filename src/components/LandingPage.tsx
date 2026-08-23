@@ -380,32 +380,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2 sm:gap-3">
-            {isLoggedIn ? (
-              <button
-                onClick={onEnterDemo}
-                className="px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs sm:text-sm shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-              >
-                <span>Workspace</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            ) : (
-              <>
-                <button
-                  onClick={onSignIn}
-                  className="px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold text-slate-700 hover:text-blue-600 hover:bg-slate-100 border border-slate-200 transition-all cursor-pointer whitespace-nowrap"
-                >
-                  Sign In
-                </button>
-                <button
-                  onClick={onSignUp}
-                  className="px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs sm:text-sm shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                >
-                  <span className="hidden sm:inline">Get Started Free</span>
-                  <span className="sm:hidden">Get Started</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </>
-            )}
+            <button
+              onClick={onEnterDemo}
+              className="px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs sm:text-sm shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <span>Get Started</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </header>
@@ -437,11 +418,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             {/* CTA Buttons */}
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-10">
               <button
-                onClick={onSignUp}
+                onClick={onEnterDemo}
                 className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-base shadow-xl shadow-blue-600/25 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3 cursor-pointer"
               >
                 <Zap className="w-5 h-5 fill-current" />
-                Access Free Forever Plan
+                Get Started
               </button>
               <button
                 onClick={onEnterDemo}

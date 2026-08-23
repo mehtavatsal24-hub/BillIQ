@@ -825,30 +825,6 @@ export const LineItemRow = ({
                 placeholder={item.isRegret ? "REGRET" : "0.00"}
                 error={errors.rate}
               />
-              
-              <AnimatePresence>
-                {priceAlert && (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.9, y: 10 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.9, y: 10 }}
-                    className={`absolute -bottom-10 left-0 right-0 z-10 px-2 py-1 rounded shadow-lg flex items-center gap-2 border text-[9px] font-bold uppercase tracking-wider ${
-                      priceAlert.severity === 'high' ? 'bg-red-50 border-red-200 text-red-600' :
-                      priceAlert.severity === 'medium' ? 'bg-amber-50 border-amber-200 text-amber-600' :
-                      'bg-blue-50 border-blue-200 text-blue-600'
-                    }`}
-                  >
-                    <Zap className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{priceAlert.message}</span>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {isCheckingPrice && (
-                <div className="absolute top-7 right-3">
-                  <Loader2 className="h-3 w-3 animate-spin text-brand-500" />
-                </div>
-              )}
             </div>
             {!item.isRegret && lastQuoted && item.rate !== lastQuoted.rate && (
               <button 

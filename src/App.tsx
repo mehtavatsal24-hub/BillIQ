@@ -148,15 +148,14 @@ import {
   subscribeToUserDoc,
   saveDocumentRecordToCloud,
   deleteDocumentRecordFromCloud,
-  subscribeToUserDocuments
+  subscribeToUserDocuments,
+  isConfigValid,
+  db,
+  doc,
+  onSnapshot
 } from "./services/dbService";
 import { logUserActivity, logErrorEvent } from "./services/auditLogger";
-import { isConfigValid, db, auth } from "./services/firebase";
-import { logoutUser, syncUserProfileToFirestore } from "./services/auth";
-import { doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
-import { onAuthStateChanged, User } from "firebase/auth";
-import { Auth } from "./components/Auth";
-import { EmailVerificationScreen } from "./components/EmailVerificationScreen";
+import { logoutUser, syncUserProfileToFirestore, auth, subscribeToAuthChanges } from "./services/auth";
 import { LandingPage } from "./components/LandingPage";
 import { FeaturesPage } from "./components/FeaturesPage";
 import { PrivacyPolicy } from "./components/PrivacyPolicy";
@@ -179,6 +178,7 @@ import { COUNTRIES, ALL_CURRENCIES, getCountryConfig, getCurrencySymbol, getTaxN
 import { AdminDashboard, ADMIN_UID, isAdminUser } from "./components/AdminDashboard";
 import { AdminPinModal, ADMIN_DEFAULT_PIN, ADMIN_RESET_EMAIL } from "./components/AdminPinModal";
 import { Logo } from "./components/Logo";
+import { Auth } from "./components/Auth";
 import { getPlanDetails } from "./utils/planUtils";
 import { 
   consumeUserDocumentCredit, 
@@ -2747,74 +2747,24 @@ export default function App() {
     }
   }, [user?.uid, step, isAdminConsoleActive, impersonatedUser, userProfile]);
 
-  // Auth listener with Synchronous Auth Lock Guard
+  // Local Auth listener
   useEffect(() => {
-    if (!auth) {
-      setAuthLoading(false);
-      setIsInitializingAuth(false);
-      return;
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        try {
+    const unsubscribe = subscribeToAuthChanges((currentUser) => {
+      const activeUser = currentUser || null;
+      try {
+        if (currentUser) {
           localStorage.setItem("billiq_is_logged_in", "true");
           localStorage.setItem("billiq_has_entered_app", "true");
-        } catch {}
-        setShowLanding(false);
-        setUser((prevUser: any) => {
-          // ONLY reset state if switching from an existing user session to a DIFFERENT user account
-          if (prevUser?.uid && prevUser.uid !== currentUser?.uid) {
-            resetAllState();
-            purgeUnpartitionedCache(currentUser?.uid);
-            loadedUserIdRef.current = Symbol("uninitialized");
-          }
-          if (prevUser?.uid === currentUser?.uid && prevUser?.email === currentUser?.email) {
-            return prevUser;
-          }
-          return currentUser;
-        });
-        setAuthLoading(false);
-        setIsInitializingAuth(false);
-
-        // Run profile sync and account status validation asynchronously in background without blocking UI
-        if (isConfigValid && db) {
-          (async () => {
-            try {
-              await syncUserProfileToFirestore(currentUser);
-              const userDocRef = doc(db, "users", currentUser.uid);
-              const userDocSnap = await getDoc(userDocRef);
-              if (userDocSnap.exists()) {
-                const uData = userDocSnap.data();
-                if (uData?.accountStatus === "Deleted" || uData?.isDeleted === true) {
-                  await logoutUser();
-                  try {
-                    localStorage.removeItem("billiq_is_logged_in");
-                    localStorage.removeItem("billiq_has_entered_app");
-                    localStorage.removeItem("billiq_active_view");
-                    localStorage.removeItem("activeUserId");
-                  } catch {}
-                  setUser(null);
-                  setShowLanding(true);
-                  alert("This account was deleted by an administrator. Please create a new account.");
-                }
-              }
-            } catch (checkErr) {
-              console.warn("Background Firestore user sync notice:", checkErr);
-            }
-          })();
-        }
-      } else {
-        try {
+        } else {
           localStorage.removeItem("billiq_is_logged_in");
-        } catch {}
-        setUser(null);
-        setAuthLoading(false);
-        setIsInitializingAuth(false);
-      }
+        }
+      } catch {}
+      setUser(currentUser);
+      setAuthLoading(false);
+      setIsInitializingAuth(false);
     });
     return () => unsubscribe();
-  }, [resetAllState, purgeUnpartitionedCache]);
+  }, []);
 
   // Fetch user-specific contact data strictly belonging to the active user
   useEffect(() => {
@@ -6115,81 +6065,42 @@ export default function App() {
     );
   }
 
-  // Render Auth screen ONLY IF explicitly requested
-  if (showAuthScreen) {
-    return (
-      <Auth
-        onSuccess={() => {
-          try {
-            localStorage.setItem("billiq_is_logged_in", "true");
-            localStorage.setItem("billiq_has_entered_app", "true");
-          } catch {}
-          setShowAuthScreen(false);
-          setShowLanding(false);
-          setStep("dashboard");
-        }}
-        initialSignUp={authInitialSignUp}
-        onBackToLanding={() => {
-          setShowAuthScreen(false);
-          setShowLanding(true);
-        }}
-      />
-    );
-  }
-
   // Strict Auth Guard: Unauthenticated visitors MUST NOT access inner app views
   if (!user) {
+    if (showAuthScreen) {
+      return (
+        <Auth
+          initialSignUp={authInitialSignUp}
+          onBack={() => {
+            setShowAuthScreen(false);
+            setShowLanding(true);
+          }}
+        />
+      );
+    }
+
     return (
       <LandingPage
         onSignIn={() => {
-          try { localStorage.setItem("billiq_has_entered_app", "true"); } catch {}
           setAuthInitialSignUp(false);
+          setShowFeatures(false);
+          setShowLanding(false);
           setShowAuthScreen(true);
         }}
         onSignUp={() => {
-          try { localStorage.setItem("billiq_has_entered_app", "true"); } catch {}
           setAuthInitialSignUp(true);
+          setShowFeatures(false);
+          setShowLanding(false);
           setShowAuthScreen(true);
         }}
         onEnterDemo={() => {
           setAuthInitialSignUp(false);
+          setShowFeatures(false);
           setShowLanding(false);
           setShowAuthScreen(true);
         }}
         onOpenFeatures={() => setShowFeatures(true)}
         isLoggedIn={false}
-      />
-    );
-  }
-
-  // Check if email verification is required for password-registered user accounts
-  if (user && (() => {
-    const lowerEmail = String(user.email || "").toLowerCase();
-    if (lowerEmail === "support@billiq.site") return false;
-    const isPhoneUser = user.providerData?.some(
-      (p: any) => p?.providerId === "phone"
-    );
-    if (isPhoneUser) return false;
-    if (user.emailVerified === true) return false;
-    if (user.uid && sessionStorage.getItem(`verified_${user.uid}`) === "true") return false;
-    return true;
-  })()) {
-    return (
-      <EmailVerificationScreen
-        userEmail={user.email || ""}
-        onVerified={() => {
-          if (auth?.currentUser) {
-            setUser({ ...auth.currentUser });
-          }
-        }}
-        onSignOut={async () => {
-          purgeUnpartitionedCache(null);
-          await logoutUser();
-          setUser(null);
-          setUserProfile(null);
-          setImpersonatedUser(null);
-          setShowLanding(true);
-        }}
       />
     );
   }
@@ -6907,19 +6818,39 @@ export default function App() {
                             accept="image/*"
                             className="hidden" 
                             id="logo-upload"
+                            onClick={(e) => {
+                              e.currentTarget.value = "";
+                            }}
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) {
+                                if (showAuthScreen) {
+                                  return (
+                                    <Auth
+                                      initialSignUp={authInitialSignUp}
+                                      onBack={() => {
+                                        setShowAuthScreen(false);
+                                        setShowLanding(true);
+                                      }}
+                                    />
+                                  );
+                                }
                                 if (file.size > 1024 * 1024) {
                                   setLogoError(`Logo image size (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds the 1 MB maximum limit.`);
                                   e.target.value = "";
                                   return;
+                                      setAuthInitialSignUp(false);
+                                      setShowAuthScreen(true);
                                 }
                                 setLogoError(null);
                                 const reader = new FileReader();
+                                      setAuthInitialSignUp(true);
+                                      setShowAuthScreen(true);
                                 reader.onloadend = async () => {
                                   // Optimize logo size to keep it sharp and clear in printing without bloat
                                   const compressed = await compressImage(reader.result as string, 400, 400, 0.90, 'image/png');
+                                      setAuthInitialSignUp(false);
+                                      setShowAuthScreen(true);
                                   handleBusinessChange({ logo: compressed });
                                 };
                                 reader.readAsDataURL(file);
@@ -6971,6 +6902,9 @@ export default function App() {
                             accept="image/*"
                             className="hidden" 
                             id="letterhead-upload"
+                            onClick={(e) => {
+                              e.currentTarget.value = "";
+                            }}
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) {
@@ -7036,6 +6970,9 @@ export default function App() {
                             accept="image/*"
                             className="hidden" 
                             id="signature-upload"
+                            onClick={(e) => {
+                              e.currentTarget.value = "";
+                            }}
                             onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) {

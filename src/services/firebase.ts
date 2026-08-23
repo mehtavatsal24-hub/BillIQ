@@ -1,66 +1,22 @@
-import { initializeApp, getApp, getApps } from "firebase/app";
-import { getFirestore, initializeFirestore, memoryLocalCache, setLogLevel, Firestore } from "firebase/firestore";
-import { getAuth, Auth } from "firebase/auth";
+import { getApp, getApps, initializeApp } from "firebase/app";
+import { getAnalytics, isSupported } from "firebase/analytics";
+import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
-// Import the Firebase configuration
-import rawFirebaseConfig from "../../firebase-applet-config.json";
-
-// Set custom auth domain and Firebase config with fallback defaults
 const firebaseConfig = {
-  ...rawFirebaseConfig,
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || rawFirebaseConfig.apiKey || "AIzaSyCuFBQe3Wr0qO4ybrJBGuu7Bcsy-DfMtew",
-  authDomain: "new-app-74245.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || rawFirebaseConfig.projectId || "new-app-74245",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || rawFirebaseConfig.storageBucket || "new-app-74245.firebasestorage.app",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || rawFirebaseConfig.messagingSenderId || "70732456690",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || rawFirebaseConfig.appId || "1:70732456690:web:cdf42bf5e1344c9af1666b",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCuFBQe3Wr0qO4ybrJBGuu7Bcsy-DfMtew",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "new-app-74245.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "new-app-74245",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "new-app-74245.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "70732456690",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:70732456690:web:cdf42bf5e1344c9af1666b",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-3K3F4T7DQB",
 };
 
-// Silence internal Firestore SDK assertion logs
-try {
-  setLogLevel("silent");
-} catch {
-  // Ignore
-}
+export const firebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+export const firebaseAuth = getAuth(firebaseApp);
+export const firestore = getFirestore(firebaseApp);
 
-// Check if we have the minimum required config
-const isConfigValid = !!(firebaseConfig.apiKey && firebaseConfig.projectId);
-
-let app: any;
-let db: Firestore | null = null;
-let auth: Auth | null = null;
-
-if (isConfigValid) {
-  try {
-    app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-    const dbId = (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)")
-      ? firebaseConfig.firestoreDatabaseId 
-      : undefined;
-
-    const firestoreSettings = {
-      experimentalForceLongPolling: true,
-      localCache: memoryLocalCache()
-    };
-
-    try {
-      db = dbId 
-        ? initializeFirestore(app, firestoreSettings, dbId) 
-        : initializeFirestore(app, firestoreSettings);
-    } catch {
-      db = dbId ? getFirestore(app, dbId) : getFirestore(app);
-    }
-    
-    auth = getAuth(app);
-  } catch (error) {
-    console.error("Firebase initialization failed:", error);
-  }
-} else {
-  const missing = [];
-  if (!firebaseConfig.apiKey) missing.push("API Key");
-  if (!firebaseConfig.projectId) missing.push("Project ID");
-  console.warn(`Firebase configuration is incomplete. Missing: ${missing.join(", ")}. Cloud Sync will be disabled.`);
-}
-
-export { app, db, auth, isConfigValid };
-
-
+export const firebaseAnalyticsPromise = isSupported()
+  .then((supported) => (supported ? getAnalytics(firebaseApp) : null))
+  .catch(() => null);

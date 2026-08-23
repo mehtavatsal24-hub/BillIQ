@@ -1,6 +1,6 @@
-import { doc, setDoc, onSnapshot, collection, query, limit, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
-import { db, auth } from "./firebase";
-import { isTransientOrShutdownError } from "./dbService";
+import { auth } from "./auth";
+import { isTransientOrShutdownError, doc, setDoc, onSnapshot, collection, query, limit, updateDoc, deleteDoc, getDocs } from "./dbService";
+const db = null;
 
 export interface AppErrorLog {
   id: string;

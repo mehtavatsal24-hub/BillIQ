@@ -1,6 +1,6 @@
-import { auth } from "../services/firebase";
+import { auth } from "../services/auth";
 
-export const DEVELOPER_EMAIL = "mehtavatsal24@gmail.com";
+export const DEVELOPER_EMAIL = "support@billiq.site";
 
 /**
  * Checks if the specified email or currently logged in user is the developer (mehtavatsal24@gmail.com)

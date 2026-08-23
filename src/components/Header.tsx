@@ -1,6 +1,6 @@
 import React from "react";
 import { motion } from "motion/react";
-import { Globe, Plus, User as UserIcon, LogOut, HelpCircle } from "lucide-react";
+import { Plus, HelpCircle } from "lucide-react";
 import { Button } from "./Button";
 import { Logo } from "./Logo";
 import { openSupportModal } from "./ContactSupportModal";
@@ -74,24 +74,6 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden sm:inline">New Bill</span>
               <span className="sm:hidden">Bill</span>
             </Button>
-          )}
-
-          {user && onLogout && (
-            <div className="flex items-center gap-1.5 sm:gap-2 pl-1.5 sm:pl-2 border-l border-zinc-200">
-              <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-100 text-xs font-medium text-zinc-700">
-                <UserIcon className="w-3.5 h-3.5 text-brand-600" />
-                <span className="max-w-[120px] truncate font-semibold">{user.displayName || user.email?.split('@')[0]}</span>
-              </div>
-              <button
-                type="button"
-                onClick={onLogout}
-                className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold transition-colors border border-red-200 cursor-pointer"
-                title="Sign Out"
-              >
-                <LogOut className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden md:inline">Sign Out</span>
-              </button>
-            </div>
           )}
         </div>
       </div>

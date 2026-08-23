@@ -2,8 +2,9 @@ import { DimensionalOrderItem, LineItem, AIProductSuggestion, AIDocumentAnalysis
 import { sanitizeExtractedDescription } from "../utils/itemUtils";
 import mammoth from "mammoth";
 import { read, utils } from "xlsx";
-import { auth } from "./firebase";
+import { auth } from "./auth";
 import { getDisplayErrorMessage } from "../utils/errorUtils";
+import { GoogleGenAI } from "@google/genai";
 
 export { sanitizeExtractedDescription };
 
@@ -476,44 +477,99 @@ export async function analyzeDocument(
       businessName,
     };
 
+    let base64Data = "";
+    let mimeType = "";
+
     if (extractedText) {
       payload.extractedText = extractedText;
     } else {
       // Compress/downscale high-res images to avoid Base64 memory bloating and 413 Payload Too Large
-      const { base64Data, mimeType } = await compressImageFile(file);
+      const comp = await compressImageFile(file);
+      base64Data = comp.base64Data;
+      mimeType = comp.mimeType;
       payload.fileContent = base64Data;
       payload.mimeType = mimeType;
     }
 
-    const res = await fetchWithTimeout("/api/analyze-document", {
-      method: "POST",
-      headers: await getAuthHeaders(),
-      body: JSON.stringify(payload),
-    }, 180000);
+    // 1. Try server-side Express endpoint (/api/analyze-document)
+    try {
+      const res = await fetchWithTimeout("/api/analyze-document", {
+        method: "POST",
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(payload),
+      }, 180000);
 
-    if (!res.ok) {
-      let errText = "API call failed";
-      try {
-        const errData = await res.json();
-        if (errData?.error) errText = errData.error;
-      } catch {
-        if (res.status === 413) {
-          errText = "File upload payload is too large. Please upload an image with lower resolution or a smaller file size.";
-        } else if (res.status === 429) {
-          errText = "AI analysis rate limit reached. Please wait a few seconds and try again.";
-        } else if (res.status === 503) {
-          errText = "The AI service is experiencing high demand. Please try again shortly.";
+      if (res.ok) {
+        const data = await res.json();
+        const result: AIDocumentAnalysis | null = data.result || null;
+        if (result && Array.isArray(result.products)) {
+          result.products = sanitizeExtractedProducts(result.products);
         }
+        return result;
       }
-      throw new Error(errText);
+    } catch (serverErr) {
+      console.warn("[Document Analysis]: Express server API call skipped or unreachable. Utilizing direct Gemini AI client fallback...", serverErr);
     }
 
-    const data = await res.json();
-    const result: AIDocumentAnalysis | null = data.result || null;
-    if (result && Array.isArray(result.products)) {
-      result.products = sanitizeExtractedProducts(result.products);
+    // 2. Client-Side Fallback using @google/genai SDK
+    const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim();
+    if (apiKey) {
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const systemPrompt = `You are an expert AI Document Specialist and OCR Parser supporting all industries for ${businessName || "Enterprise"} (${industry || "General"}).
+Analyze the provided document (Purchase Order, Invoice, Quotation, Manifest, Delivery Challan, Packing List, or RFQ).
+Extract EVERY SINGLE LINE ITEM WITHOUT EXCEPTION. Return JSON strictly adhering to:
+{
+  "documentType": "TAX_INVOICE" | "PURCHASE_ORDER" | "QUOTATION" | "DELIVERY_CHALLAN" | "PACKING_LIST",
+  "documentNumber": "string",
+  "date": "YYYY-MM-DD",
+  "dueDate": "YYYY-MM-DD",
+  "customer": { "name": "string", "address": "string", "taxId": "string", "email": "string", "phone": "string" },
+  "supplier": { "name": "string", "address": "string", "taxId": "string" },
+  "products": [
+    { "name": "string", "hsn": "string", "quantity": 1, "unit": "NOS", "rate": 0, "suggestedTaxRate": 18 }
+  ]
+}`;
+
+        const contents: any[] = [];
+        if (extractedText) {
+          contents.push(systemPrompt + "\n\nEXTRACTED DOCUMENT TEXT:\n" + extractedText);
+        } else if (base64Data) {
+          contents.push(
+            { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } },
+            systemPrompt
+          );
+        }
+
+        const models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"];
+        for (const model of models) {
+          try {
+            const response = await ai.models.generateContent({
+              model,
+              contents,
+              config: {
+                responseMimeType: "application/json",
+                temperature: 0.1,
+              },
+            });
+            const text = response.text;
+            if (text) {
+              const parsed = safeJSONParse(text);
+              if (parsed && Array.isArray(parsed.products)) {
+                parsed.products = sanitizeExtractedProducts(parsed.products);
+              }
+              return parsed;
+            }
+          } catch (modelErr) {
+            console.warn(`[Client Gemini Fallback] Model ${model} failed, trying next...`, modelErr);
+          }
+        }
+      } catch (clientErr) {
+        console.error("[Client Gemini Fallback] Exception:", clientErr);
+      }
     }
-    return result;
+
+    throw new Error("Document analysis could not be completed. Please ensure your backend server is running (`npm run dev`) or check your GEMINI_API_KEY.");
   } catch (error) {
     console.error("Document analysis failed:", error);
     throw error;
@@ -625,62 +681,14 @@ export async function analyzeLetterhead(
 }
 
 export async function analyzePriceAnomaly(
-  currentPrice: number,
-  productDescription: string,
-  priceHistory: PriceHistoryItem[],
-  allItems: LineItem[],
-  customerName?: string,
-  currency: string = "INR"
+  _currentPrice: number,
+  _productDescription: string,
+  _priceHistory: PriceHistoryItem[] = [],
+  _allItems: LineItem[] = [],
+  _customerName?: string,
+  _currency?: string
 ): Promise<{ severity: "low" | "medium" | "high"; message: string } | null> {
-  if (currentPrice <= 0 || !productDescription || productDescription.trim().length < 3) return null;
-
-  // 1. Instant offline rule-based check against historical prices
-  if (priceHistory && priceHistory.length > 0) {
-    const descLower = (productDescription || "").toLowerCase();
-    const matchingHistory = priceHistory.filter(
-      (h) => h.description && (h.description || "").toLowerCase().includes(descLower.slice(0, 8))
-    );
-
-    if (matchingHistory.length > 0) {
-      const avgRate = matchingHistory.reduce((acc, h) => acc + (h.rate || 0), 0) / matchingHistory.length;
-      if (avgRate > 0) {
-        if (currentPrice < avgRate * 0.3) {
-          return {
-            severity: "high",
-            message: `Price (${currentPrice} ${currency}) is significantly below historical average (${avgRate.toFixed(2)} ${currency}). Check for missing digits or typos.`,
-          };
-        } else if (currentPrice > avgRate * 3.0) {
-          return {
-            severity: "medium",
-            message: `Price (${currentPrice} ${currency}) is over 3x higher than historical average (${avgRate.toFixed(2)} ${currency}).`,
-          };
-        }
-      }
-    }
-  }
-
-  // 2. Intra-document size-price inversion check
-  const currentDescLower = (productDescription || "").toLowerCase();
-  for (const otherItem of allItems) {
-    if (!otherItem.description || otherItem.description === productDescription || !otherItem.rate) continue;
-    const otherDescLower = (otherItem.description || "").toLowerCase();
-
-    const currentSizeMatch = currentDescLower.match(/\b(\d+)\s*(?:inch|\"|in)\b/);
-    const otherSizeMatch = otherDescLower.match(/\b(\d+)\s*(?:inch|\"|in)\b/);
-
-    if (currentSizeMatch && otherSizeMatch) {
-      const currentSize = parseInt(currentSizeMatch[1]);
-      const otherSize = parseInt(otherSizeMatch[1]);
-
-      if (currentSize > otherSize && currentPrice < otherItem.rate * 0.4) {
-        return {
-          severity: "high",
-          message: `Larger item (${currentSize}") rate (${currentPrice}) is much lower than smaller item (${otherSize}" @ ${otherItem.rate}). Check for typos.`,
-        };
-      }
-    }
-  }
-
+  // AI rate/price anomaly suggestions disabled per user request
   return null;
 }
 

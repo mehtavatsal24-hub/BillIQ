@@ -1,14 +1,14 @@
 [
   {
     "id": "XssthfE8PHMi9j3iNMmCYQ9Sqgk2",
-    "username": "Founder",
+    "username": "Vatsal Mehta",
     "email": "mehtavatsal24@gmail.com",
     "createdAt": "2026-08-11T09:10:33.539Z",
-    "updatedAt": "2026-08-18T16:08:25.633Z",
-    "lastActive": "2026-08-18T16:08:25.633Z",
-    "lastSeen": "2026-08-18T16:08:25.633Z",
+    "updatedAt": "2026-08-23T09:57:11.643Z",
+    "lastActive": "2026-08-23T09:57:11.643Z",
+    "lastSeen": "2026-08-23T09:57:11.643Z",
     "isOnline": true,
-    "lastActiveAt": "2026-08-18T16:08:25.633Z",
+    "lastActiveAt": "2026-08-23T09:57:11.643Z",
     "hasReceivedInactivityReminder": true,
     "lastInactivityReminderSentAt": "2026-08-18T15:34:04.142Z"
   },
@@ -31,6 +31,19 @@
     "lastActive": "2026-08-18T15:57:54.594Z",
     "lastActiveAt": "2026-08-18T15:57:54.594Z",
     "lastSeen": null,
-    "isOnline": false
+    "isOnline": false,
+    "hasReceivedInactivityReminder": true,
+    "lastInactivityReminderSentAt": "2026-08-22T12:08:31.059Z"
+  },
+  {
+    "id": "local-admin",
+    "username": "Local Admin",
+    "email": "admin@billiq.site",
+    "createdAt": "2026-08-22T14:49:41.933Z",
+    "updatedAt": "2026-08-22T16:43:34.630Z",
+    "lastActive": "2026-08-22T16:43:34.630Z",
+    "lastActiveAt": "2026-08-22T16:43:34.630Z",
+    "lastSeen": "2026-08-22T16:43:34.630Z",
+    "isOnline": true
   }
 ]

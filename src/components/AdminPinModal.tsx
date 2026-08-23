@@ -10,7 +10,7 @@ interface AdminPinModalProps {
 }
 
 export const ADMIN_DEFAULT_PIN = "1224";
-export const ADMIN_RESET_EMAIL = "mehtavatsal24@gmail.com";
+export const ADMIN_RESET_EMAIL = "support@billiq.site";
 
 const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -82,7 +82,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          attemptedEmail: userEmail || "mehtavatsal24@gmail.com",
+          attemptedEmail: userEmail || ADMIN_RESET_EMAIL,
           attemptsCount,
           timestamp: new Date().toISOString(),
           userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "Browser",
@@ -112,7 +112,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
 
       // Trigger high-priority alert email to founder
       dispatchSecurityAlert(newCount);
-      setErrorMsg("Security alert triggered: 3 failed attempts recorded. Alert sent to mehtavatsal24@gmail.com. Input locked for 5 minutes.");
+      setErrorMsg(`Security alert triggered: 3 failed attempts recorded. Alert sent to ${ADMIN_RESET_EMAIL}. Input locked for 5 minutes.`);
     } else {
       setErrorMsg(`Incorrect PIN. Please try again. (${3 - newCount} attempt${3 - newCount === 1 ? "" : "s"} remaining before temporary lockout)`);
     }
@@ -267,7 +267,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
               <span>Lockout Active</span>
             </div>
             <p className="text-xs text-zinc-300 leading-relaxed">
-              Too many consecutive failed attempts. An automated security alert was dispatched to <strong className="text-white">mehtavatsal24@gmail.com</strong>.
+              Too many consecutive failed attempts. An automated security alert was dispatched to <strong className="text-white">{ADMIN_RESET_EMAIL}</strong>.
             </p>
             <div className="flex items-center justify-center gap-2 p-2.5 bg-zinc-950/90 rounded-xl border border-zinc-800 text-amber-400 font-mono text-sm font-bold">
               <Clock className="w-4 h-4 animate-spin text-amber-400" />
@@ -450,7 +450,7 @@ export const AdminPinModal: React.FC<AdminPinModalProps> = ({
                 className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/30 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <Send className="w-4 h-4" />
-                <span>{isSendingReset ? "Dispatching Request..." : "Send Reset Email to mehtavatsal24@gmail.com"}</span>
+                <span>{isSendingReset ? "Dispatching Request..." : `Send Reset Email to ${ADMIN_RESET_EMAIL}`}</span>
               </button>
 
               <button

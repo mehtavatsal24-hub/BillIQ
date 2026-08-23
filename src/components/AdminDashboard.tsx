@@ -62,9 +62,7 @@ import {
   Tooltip,
   Legend
 } from "recharts";
-import { collection, onSnapshot } from "firebase/firestore";
-import { db, isConfigValid } from "../services/firebase";
-import { getAllUsersFromCloud, saveToCloud, deleteFromCloud, deleteUserAccount, loadFromCloud } from "../services/dbService";
+import { isConfigValid, db, collection, onSnapshot, getAllUsersFromCloud, saveToCloud, deleteFromCloud, deleteUserAccount, loadFromCloud } from "../services/dbService";
 import { adminGrantTrialCredits, updateTrialLedger, getEmailKey } from "../services/trialService";
 import { generateInvoicePDF, downloadInvoicePDF } from "../services/pdfService";
 import { AuditLogEntry, getUserAuditLogs, logUserActivity } from "../services/auditLogger";
@@ -147,9 +145,6 @@ export const ADMIN_EMAILS = [
 export const isAdminUser = (user: any, userProfile?: any): boolean => {
   if (!user && !userProfile) return false;
 
-  // Check RBAC role field
-  if (user?.role === 'admin' || userProfile?.role === 'admin') return true;
-
   const email = (
     user?.email || 
     userProfile?.email ||
@@ -159,11 +154,7 @@ export const isAdminUser = (user: any, userProfile?: any): boolean => {
     ""
   ).toLowerCase().trim();
 
-  if (ADMIN_EMAILS.some(e => e.toLowerCase() === email) || email.includes('admin')) {
-    return true;
-  }
-
-  if (user?.planTier === 'enterprise' || userProfile?.planTier === 'enterprise') {
+  if (ADMIN_EMAILS.some(e => e.toLowerCase() === email)) {
     return true;
   }
 

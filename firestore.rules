@@ -1,180 +1,23 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Global Helper Functions
-    function isAuthenticated() {
+    function signedIn() {
       return request.auth != null;
     }
 
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
     function isAdmin() {
-      return isAuthenticated() && (
-        request.auth.uid == 'XssthfE8PHMi9j3iNMmCYQ9Sqgk2' ||
-        (request.auth.token.email != null && (
-          request.auth.token.email.lower() == 'support@billiq.site' ||
-          request.auth.token.email.lower() == 'mehtavatsal24@gmail.com' ||
-          request.auth.token.email.lower() == 'admin@smartbill.ai'
-        ))
+      return signedIn() && (
+        request.auth.token.admin == true ||
+        request.auth.token.email in [
+          'support@billiq.site',
+          'mehtavatsal24@gmail.com',
+          'admin@billiq.site'
+        ]
       );
     }
 
-    // Default deny for all unmatched paths
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Strict user-specific isolation: /users/{userId} and nested documents/subcollections
-    // Admin user or Document Owner has full read/write access to their specific profile and files
     match /users/{userId} {
-      allow get, list, update, delete: if isOwner(userId) || isAdmin();
-      allow create: if (isAuthenticated() && request.auth.uid == userId) || isAdmin();
-
-      match /{allPaths=**} {
-        allow get, list, update, delete: if isOwner(userId) || isAdmin();
-        allow create: if (isAuthenticated() && request.auth.uid == userId) || isAdmin();
-      }
-    }
-
-    // Anti-Abuse Permanent Trial Ledger: /trialLedgers/{emailKey}
-    // Authenticated users can read/write their specific trial ledger record.
-    // Listing all ledgers or deleting is strictly restricted to Admin ONLY.
-    match /trialLedgers/{emailKey} {
-      allow get, create, update: if isAuthenticated();
-      allow list, delete: if isAdmin();
-    }
-
-    // Contacts collection with strict user-level data isolation
-    match /contacts/{contactId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        isAdmin() || request.resource.data.userId == request.auth.uid
-      );
-      allow update, delete: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Global documents collection with strict user-level data isolation
-    match /documents/{docId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        isAdmin() || request.resource.data.userId == request.auth.uid
-      );
-      allow update, delete: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Invoices collection with strict user-level data isolation
-    match /invoices/{invoiceId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        isAdmin() || request.resource.data.userId == request.auth.uid
-      );
-      allow update, delete: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Quotations collection with strict user-level data isolation
-    match /quotations/{quotationId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        isAdmin() || request.resource.data.userId == request.auth.uid
-      );
-      allow update, delete: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Items collection with strict user-level data isolation
-    match /items/{itemId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        isAdmin() || request.resource.data.userId == request.auth.uid
-      );
-      allow update, delete: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Parties collection with strict user-level data isolation
-    match /parties/{partyId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        isAdmin() || request.resource.data.userId == request.auth.uid
-      );
-      allow update, delete: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Customers collection with strict user-level data isolation
-    match /customers/{customerId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        isAdmin() || request.resource.data.userId == request.auth.uid
-      );
-      allow update, delete: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Suppliers collection with strict user-level data isolation
-    match /suppliers/{supplierId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-      allow create: if isAuthenticated() && (
-        isAdmin() || request.resource.data.userId == request.auth.uid
-      );
-      allow update, delete: if isAuthenticated() && (
-        isAdmin() || resource.data.userId == request.auth.uid
-      );
-    }
-
-    // Admin security and configuration settings
-    match /admin_config/{docId} {
-      allow read, write: if isAdmin();
-    }
-
-    // Live AI API Usage Logs & Spend Intelligence
-    match /api_usage_logs/{logId} {
-      allow create: if isAuthenticated() || true;
-      allow read, list, update, delete: if isAdmin();
-    }
-
-    // Real-Time User Presence
-    match /presence/{userId} {
-      allow read: if isAuthenticated() || isAdmin();
-      allow write: if isOwner(userId) || isAdmin();
-    }
-
-    // Real-time Application Health & Error Logs
-    match /errorLogs/{logId} {
-      allow create: if true;
-      allow read, list, update, delete: if isAdmin();
+      allow read, write: if signedIn() && (request.auth.uid == userId || isAdmin());
     }
   }
 }

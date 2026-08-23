@@ -4,9 +4,9 @@
  * document creation breakdown, feature adoption rate, and power users.
  */
 
-import { collection, doc, setDoc, onSnapshot, getDocs, limit, query, orderBy, where, Timestamp } from "firebase/firestore";
-import { db } from "./firebase";
-import { auth } from "./firebase";
+import { auth } from "./auth";
+import { doc, setDoc, onSnapshot, collection, query, limit, orderBy, where, getDocs } from "./dbService";
+const db = null;
 
 export interface ApiUsageEntry {
   id: string;
