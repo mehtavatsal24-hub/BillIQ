@@ -506,67 +506,11 @@ export async function analyzeDocument(
         }
         return result;
       }
-    } catch (serverErr) {
-      console.warn("[Document Analysis]: Express server API call skipped or unreachable. Utilizing direct Gemini AI client fallback...", serverErr);
-    }
+} catch (serverErr) {
+  console.error("[Document Analysis] Server API error:", serverErr);
+  throw serverErr;
+}
 
-    // 2. Client-Side Fallback using @google/genai SDK
-    const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim();
-    if (apiKey) {
-      try {
-        const ai = new GoogleGenAI({ apiKey });
-        const systemPrompt = `You are an expert AI Document Specialist and OCR Parser supporting all industries for ${businessName || "Enterprise"} (${industry || "General"}).
-Analyze the provided document (Purchase Order, Invoice, Quotation, Manifest, Delivery Challan, Packing List, or RFQ).
-Extract EVERY SINGLE LINE ITEM WITHOUT EXCEPTION. Return JSON strictly adhering to:
-{
-  "documentType": "TAX_INVOICE" | "PURCHASE_ORDER" | "QUOTATION" | "DELIVERY_CHALLAN" | "PACKING_LIST",
-  "documentNumber": "string",
-  "date": "YYYY-MM-DD",
-  "dueDate": "YYYY-MM-DD",
-  "customer": { "name": "string", "address": "string", "taxId": "string", "email": "string", "phone": "string" },
-  "supplier": { "name": "string", "address": "string", "taxId": "string" },
-  "products": [
-    { "name": "string", "hsn": "string", "quantity": 1, "unit": "NOS", "rate": 0, "suggestedTaxRate": 18 }
-  ]
-}`;
-
-        const contents: any[] = [];
-        if (extractedText) {
-          contents.push(systemPrompt + "\n\nEXTRACTED DOCUMENT TEXT:\n" + extractedText);
-        } else if (base64Data) {
-          contents.push(
-            { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } },
-            systemPrompt
-          );
-        }
-
-        const models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"];
-        for (const model of models) {
-          try {
-            const response = await ai.models.generateContent({
-              model,
-              contents,
-              config: {
-                responseMimeType: "application/json",
-                temperature: 0.1,
-              },
-            });
-            const text = response.text;
-            if (text) {
-              const parsed = safeJSONParse(text);
-              if (parsed && Array.isArray(parsed.products)) {
-                parsed.products = sanitizeExtractedProducts(parsed.products);
-              }
-              return parsed;
-            }
-          } catch (modelErr) {
-            console.warn(`[Client Gemini Fallback] Model ${model} failed, trying next...`, modelErr);
-          }
-        }
-      } catch (clientErr) {
-        console.error("[Client Gemini Fallback] Exception:", clientErr);
-      }
-    }
 
     throw new Error("Document analysis could not be completed. Please ensure your backend server is running (`npm run dev`) or check your GEMINI_API_KEY.");
   } catch (error) {
