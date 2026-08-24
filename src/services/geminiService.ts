@@ -4,7 +4,6 @@ import mammoth from "mammoth";
 import { read, utils } from "xlsx";
 import { auth } from "./auth";
 import { getDisplayErrorMessage } from "../utils/errorUtils";
-import { GoogleGenAI } from "@google/genai";
 
 export { sanitizeExtractedDescription };
 
