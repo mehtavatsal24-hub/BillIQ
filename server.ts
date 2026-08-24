@@ -202,19 +202,32 @@ async function checkAuthBeforeGemini(req: express.Request): Promise<any> {
 }
 
 function getGenAI() {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
+  const apiKey = (process.env.GEMINI_API_KEY || "").trim();
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY_MISSING: Add GEMINI_API_KEY to .env.local and restart the server.");
+    throw new Error("GEMINI_API_KEY_MISSING: Gemini API key is not configured on the production server.");
   }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build-server",
-      },
-    },
-  });
+  return new GoogleGenAI({ apiKey });
 }
+
+// Health check endpoint for production Gemini diagnostic monitoring
+app.get("/api/health/gemini", (_req, res) => {
+  const apiKey = (process.env.GEMINI_API_KEY || "").trim();
+  if (apiKey) {
+    return res.json({
+      ok: true,
+      geminiConfigured: true,
+      primaryModel: "gemini-3.7-flash",
+    });
+  } else {
+    return res.status(500).json({
+      ok: false,
+      geminiConfigured: false,
+      primaryModel: "gemini-3.7-flash",
+      error: "GEMINI_API_KEY_MISSING",
+      message: "GEMINI_API_KEY environment variable is not configured on the production server.",
+    });
+  }
+});
 
 // Helper: callWithRetry with multi-model fallback and backoff for rate limits / transient errors
 async function callWithRetry<T>(
@@ -2287,13 +2300,19 @@ function fallbackExtractLinesFromText(text: string): { itemCount: number; produc
 
 // 6. Analyze Document
 app.post("/api/analyze-document", async (req, res) => {
+  const { extractedText, fileContent, mimeType, industry, businessName } = req.body || {};
+  const apiKeyConfigured = Boolean((process.env.GEMINI_API_KEY || "").trim());
+
+  console.log("[Gemini] request received");
+  console.log(`[Gemini] API key configured: ${apiKeyConfigured}`);
+  console.log(`[Gemini] primary model: ${GEMINI_MODELS[0]}`);
+  console.log(`[Gemini] input type: ${extractedText ? "extractedText" : fileContent ? "fileContent (" + (mimeType || "unknown") + ")" : "none"}`);
+
   try {
     const user = await checkAuthBeforeGemini(req);
     if (!user) {
       console.log("[Analyze Document]: Processing for unauthenticated/guest session or refreshed token.");
     }
-
-    const { extractedText, fileContent, mimeType, industry, businessName } = req.body;
 
     const ai = getGenAI();
     const systemInstruction = `You are an expert AI Document Specialist and OCR Parser supporting all industries (Manufacturing, Metals & Engineering, Chemicals, Pharmaceuticals, Textiles, Food & Beverages, Agriculture, FMCG, Electronics & Electricals, Hardware, Construction, Automotive, Logistics, Services, Packaging, etc.) for: ${businessName || "Enterprise"} (${industry || "General / Multi-Industry"}).
@@ -2375,9 +2394,10 @@ The supplied table has columns similar to: serial number, description, HSN, quan
         },
       ];
     } else {
-      return res.status(400).json({ error: "No document text or content provided." });
+      return res.status(400).json({ error: "MISSING_PAYLOAD", message: "No document text or content provided." });
     }
 
+    console.log("[Gemini] Gemini request started");
     const response = await runExtractionWithPressureControl(() => callWithRetry((model) =>
       ai.models.generateContent({
         model,
@@ -2431,13 +2451,13 @@ The supplied table has columns similar to: serial number, description, HSN, quan
         name: sanitizeExtractedDescription(p.name || p.description || ""),
       }));
     }
+    console.log("[Gemini] Gemini request succeeded");
     return res.json({ result: parsed });
   } catch (err: any) {
-    console.error("Backend analyze-document error:", err?.message || err);
+    console.error(`[Gemini] Gemini request failed: ${err?.message || err}`);
     const errStr = String(err?.message || err);
 
-    // Fallback: If text was extracted from file (e.g. spreadsheet, word doc, text file), salvage rows even if AI service quota is exhausted
-    const { extractedText } = req.body || {};
+    // Offline tabular parse fallback if raw text is provided
     if (extractedText && typeof extractedText === "string") {
       const fallbackData = fallbackExtractLinesFromText(extractedText);
       if (fallbackData.products.length > 0) {
@@ -2446,13 +2466,16 @@ The supplied table has columns similar to: serial number, description, HSN, quan
       }
     }
 
+    if (errStr.includes("GEMINI_API_KEY_MISSING")) {
+      return res.status(500).json({ error: "GEMINI_API_KEY_MISSING", message: "Gemini API key is not configured on the production server." });
+    }
     if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("credits") || errStr.includes("quota")) {
-      return res.status(429).json({ error: "Your Gemini API credits or quota are currently exhausted. Please update your billing at AI Studio or import line items via CSV/Excel." });
+      return res.status(429).json({ error: "GEMINI_QUOTA_EXCEEDED", message: "Your Gemini API credits or quota are currently exhausted. Please update your billing at AI Studio or import line items via CSV/Excel." });
     }
     if (errStr.includes("503") || errStr.includes("UNAVAILABLE") || errStr.includes("high demand") || errStr.includes("spikes in demand")) {
-      return res.status(503).json({ error: "The AI service is experiencing temporary high demand from the provider. Please try again in a few moments." });
+      return res.status(503).json({ error: "GEMINI_SERVICE_UNAVAILABLE", message: "The AI service is experiencing temporary high demand from the provider. Please try again in a few moments." });
     }
-    return res.status(500).json({ error: "Document analysis failed. Please verify the document format or enter items manually." });
+    return res.status(500).json({ error: "GEMINI_API_ERROR", message: err?.message || "Document analysis failed on the server." });
   }
 });
 
@@ -3286,7 +3309,6 @@ IMPORTANT GUIDELINES:
         contents,
         config: {
           systemInstruction,
-          temperature: 0.2,
           tools: tools ? [{ functionDeclarations: tools }] : undefined,
         },
       })
