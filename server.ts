@@ -10,7 +10,6 @@ import rateLimit from "express-rate-limit";
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createServer as createViteServer } from "vite";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -523,7 +522,7 @@ function loadUsersFromDisk() {
       if (Array.isArray(parsed) && parsed.length > 0) {
         registeredUsers = parsed;
       }
-    } else {
+    } else if (!process.env.VERCEL) {
       saveUsersToDisk();
     }
   } catch (err) {
@@ -1766,9 +1765,11 @@ async function processBackgroundEmailAutomations() {
 }
 
 // Start background cron worker (Runs every 60 seconds)
-setInterval(() => {
-  processBackgroundEmailAutomations().catch(err => console.error("[Auto-Cron Error]:", err));
-}, 60 * 1000);
+if (!process.env.VERCEL) {
+  setInterval(() => {
+    processBackgroundEmailAutomations().catch(err => console.error("[Auto-Cron Error]:", err));
+  }, 60 * 1000);
+}
 
 // 1. Trigger 1st Document Creation / 2-Day Feedback Requests Endpoint
 app.post(["/api/send-first-doc-followup", "/api/send-feedback-requests"], async (req, res) => {
@@ -3326,7 +3327,8 @@ IMPORTANT GUIDELINES:
 
 // Vite middleware for development vs static serve for production
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
