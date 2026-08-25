@@ -192,7 +192,7 @@ async function dispatchEmail({
 }
 
 // Initialize Google GenAI on the secure server side
-const GEMINI_MODELS = ["gemini-3.7-flash"];
+const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-pro"];
 const GEMINI_MODEL = GEMINI_MODELS[0];
 
 // Server-side check before running Gemini
