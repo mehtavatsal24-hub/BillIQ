@@ -208,6 +208,96 @@ export async function callWithRetry<T>(
   }
 }
 
+export function fallbackExtractLinesFromText(text: string): AIDocumentAnalysis {
+  const lines = (text || "").split("\n").map(l => l.trim()).filter(Boolean);
+  const products: any[] = [];
+  const customer: any = {};
+  const uomRegex = /\b(NOS|PCS|KGS|KG|MTR|MTRS|SET|SETS|BOX|BOXES|LITERS|LITER|LTR|TONS|TON|PKT|BAG|BAGS|EA|FEET|FT|INCH|SQM|SQF|CBM|CFT|HRS|JOB)\b/i;
+
+  for (const line of lines) {
+    const gstinMatch = line.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z0-9]{1}[Z]{1}[A-Z0-9]{1}\b/i);
+    if (gstinMatch && !customer.gstin) customer.gstin = gstinMatch[0].toUpperCase();
+
+    const emailMatch = line.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/);
+    if (emailMatch && !customer.email) customer.email = emailMatch[0].toLowerCase();
+
+    const phoneMatch = line.match(/(?:\+91[\-\s]?)?[6789]\d{9}\b/);
+    if (phoneMatch && !customer.phone) customer.phone = phoneMatch[0];
+
+    const customerNameMatch = line.match(/^(?:M\/s\.?|Customer|Buyer|To|Party|Bill To)\s*:\s*([A-Za-z0-9\s.,&'-]{3,50})/i);
+    if (customerNameMatch && !customer.name) {
+      customer.name = customerNameMatch[1].trim();
+    }
+
+    if (/^(s\.?no|sr|item|description|particulars|qty|rate|amount|price|hsn|total|tax|gst)\b/i.test(line) && !line.match(/\d{2,}/)) {
+      continue;
+    }
+
+    if (line.includes(",") || line.includes("\t") || line.includes("|")) {
+      const parts = line.split(/[,\t|]/).map(p => p.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        let name = "";
+        let qty = 1;
+        let rate = 0;
+        let hsn = "";
+        let unit = "NOS";
+
+        for (const part of parts) {
+          const num = parseFloat(part.replace(/,/g, ""));
+          if (/^\d{6,8}$/.test(part)) {
+            hsn = part;
+          } else if (uomRegex.test(part)) {
+            const m = part.match(uomRegex);
+            if (m) unit = m[1].toUpperCase();
+          } else if (!isNaN(num) && num > 0 && qty === 1) {
+            qty = num;
+          } else if (!isNaN(num) && num > 0) {
+            rate = num;
+          } else if (part.length > 2 && !/^(item|qty|rate|amount|price|description|hsn|total|s\.no|sr)$/i.test(part)) {
+            name = name ? `${name} ${part}` : part;
+          }
+        }
+        if (name && name.length > 2) {
+          products.push({
+            name: sanitizeExtractedDescription(name),
+            quantity: qty || 1,
+            rate: rate || 0,
+            hsn: hsn || "84818030",
+            suggestedTaxRate: 18,
+            unit: unit || "NOS",
+          });
+        }
+      }
+    } else {
+      const match = line.match(/^(\d+[\.\)]\s+)?([A-Za-z0-9\s\-\#\.\/\"\'\(\)\+\@]+?)\s+(\d+(?:\.\d+)?)\s*(NOS|PCS|KGS|MTR|MTRS|SET|BOX|LITERS|LTR|TONS|PKT|BAG|EA)?\s*(?:(?:@|Rs\.?|INR)?\s*(\d+(?:\.\d+)?))?(?:\s+(\d{6,8}))?$/i);
+      if (match) {
+        const namePart = match[2]?.trim();
+        const qtyPart = parseFloat(match[3]);
+        const unitPart = match[4]?.toUpperCase() || "NOS";
+        const ratePart = match[5] ? parseFloat(match[5]) : 0;
+        const hsnPart = match[6] || "";
+
+        if (namePart && namePart.length >= 3 && !/^(subtotal|total|grand total|taxable amount|round off|cgst|sgst|igst)$/i.test(namePart)) {
+          products.push({
+            name: sanitizeExtractedDescription(namePart),
+            quantity: isNaN(qtyPart) || qtyPart <= 0 ? 1 : qtyPart,
+            rate: isNaN(ratePart) || ratePart < 0 ? 0 : ratePart,
+            hsn: hsnPart || "84818030",
+            suggestedTaxRate: 18,
+            unit: unitPart,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    itemCount: products.length,
+    products,
+    customer,
+  };
+}
+
 /**
  * A highly robust JSON parser that handles clean, unescaped, or truncated JSON responses
  * (especially useful for large 200+ item line-item extractions).
@@ -469,11 +559,14 @@ export async function analyzeDocument(
 
     const extractedText = await extractTextFromFile(file);
 
+    const apiKey = (import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim();
+
     let payload: any = {
       industry,
       history,
       letterhead,
       businessName,
+      apiKey,
     };
 
     let base64Data = "";
@@ -501,44 +594,86 @@ export async function analyzeDocument(
       if (res.ok) {
         const data = await res.json();
         const result: AIDocumentAnalysis | null = data.result || null;
-        if (result && Array.isArray(result.products)) {
+        if (result && Array.isArray(result.products) && result.products.length > 0) {
           result.products = sanitizeExtractedProducts(result.products);
           return result;
         }
       }
     } catch (serverErr: any) {
-      console.warn("[Document Analysis] Server API call bypassed/unreachable, utilizing safe fallback:", serverErr);
+      console.warn("[Document Analysis] Server API call unreachable/bypassed, trying client Gemini AI...", serverErr);
     }
 
-    // Safe fallback result: guaranteed smooth document opening without red modal errors
-    return {
-      itemCount: 1,
-      products: [
-        {
-          name: file.name ? `Extracted Item (${file.name.split('.')[0]})` : "Extracted Line Item 1",
-          quantity: 1,
-          rate: 0,
-          hsn: "84818030",
-          suggestedTaxRate: 18,
-          unit: "NOS",
-        },
-      ],
-    };
+    // 2. Client-Side Fallback using @google/genai SDK
+    if (apiKey) {
+      try {
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({ apiKey });
+        const systemPrompt = `You are an expert AI Document Specialist and OCR Parser supporting all industries for ${businessName || "Enterprise"} (${industry || "General"}).
+Analyze the provided document (Purchase Order, Invoice, Quotation, Manifest, Delivery Challan, Packing List, or RFQ).
+EXTRACT EVERY SINGLE LINE ITEM WITHOUT EXCEPTION. Extract complete technical product descriptions, material grades, pressure classes, standards, exact quantities, units of measure (NOS, KGS, MTR, LTR, SET, etc.), rates, and 8-digit Indian HSN codes.
+Return JSON strictly adhering to:
+{
+  "documentType": "TAX_INVOICE" | "PURCHASE_ORDER" | "QUOTATION" | "DELIVERY_CHALLAN" | "PACKING_LIST",
+  "documentNumber": "string",
+  "date": "YYYY-MM-DD",
+  "dueDate": "YYYY-MM-DD",
+  "customer": { "name": "string", "address": "string", "taxId": "string", "email": "string", "phone": "string" },
+  "supplier": { "name": "string", "address": "string", "taxId": "string" },
+  "products": [
+    { "name": "string", "hsn": "string", "quantity": 1, "unit": "NOS", "rate": 0, "suggestedTaxRate": 18 }
+  ]
+}`;
+
+        const contents: any[] = [];
+        if (extractedText) {
+          contents.push({ text: systemPrompt + "\n\nEXTRACTED DOCUMENT TEXT:\n" + extractedText });
+        } else if (base64Data) {
+          contents.push(
+            { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } },
+            { text: systemPrompt + "\n\nExtract all table rows from this document image/PDF with complete technical details, HSN, quantity, unit, and unit price." }
+          );
+        }
+
+        const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+        for (const model of models) {
+          try {
+            const response = await ai.models.generateContent({
+              model,
+              contents,
+              config: {
+                responseMimeType: "application/json",
+                temperature: 0.1,
+              },
+            });
+            const text = response.text;
+            if (text) {
+              const parsed = safeJSONParse(text);
+              if (parsed && Array.isArray(parsed.products) && parsed.products.length > 0) {
+                parsed.products = sanitizeExtractedProducts(parsed.products);
+                return parsed;
+              }
+            }
+          } catch (modelErr) {
+            console.warn(`[Client Gemini AI] Model ${model} retry note:`, modelErr);
+          }
+        }
+      } catch (clientErr) {
+        console.error("[Client Gemini AI] Extraction exception:", clientErr);
+      }
+    }
+
+    // 3. Fallback: Offline text extraction if raw text is available
+    if (extractedText && typeof extractedText === "string" && extractedText.trim()) {
+      const offlineResult = fallbackExtractLinesFromText(extractedText);
+      if (offlineResult && offlineResult.products.length > 0) {
+        return offlineResult;
+      }
+    }
+
+    throw new Error("Document analysis could not be completed. Please check your GEMINI_API_KEY or upload a clear document image/PDF.");
   } catch (error) {
     console.error("Document analysis failed:", error);
-    return {
-      itemCount: 1,
-      products: [
-        {
-          name: "Document Line Item 1",
-          quantity: 1,
-          rate: 0,
-          hsn: "84818030",
-          suggestedTaxRate: 18,
-          unit: "NOS",
-        },
-      ],
-    };
+    throw error;
   }
 }
 

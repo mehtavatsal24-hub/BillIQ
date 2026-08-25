@@ -200,8 +200,8 @@ async function checkAuthBeforeGemini(req: express.Request): Promise<any> {
   return { uid: "local-admin", email: "admin@billiq.site" };
 }
 
-function getGenAI() {
-  const apiKey = (process.env.GEMINI_API_KEY || "").trim();
+function getGenAI(customKey?: string) {
+  const apiKey = (customKey || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "").trim();
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY_MISSING: Gemini API key is not configured on the production server.");
   }
@@ -2274,8 +2274,8 @@ function fallbackExtractLinesFromText(text: string): { itemCount: number; produc
 
 // 6. Analyze Document
 app.post("/api/analyze-document", async (req, res) => {
-  const { extractedText, fileContent, mimeType, industry, businessName } = req.body || {};
-  const apiKeyConfigured = Boolean((process.env.GEMINI_API_KEY || "").trim());
+  const { extractedText, fileContent, mimeType, industry, businessName, apiKey: clientApiKey } = req.body || {};
+  const apiKeyConfigured = Boolean((process.env.GEMINI_API_KEY || clientApiKey || "").trim());
 
   console.log("[Gemini] request received");
   console.log(`[Gemini] API key configured: ${apiKeyConfigured}`);
@@ -2288,7 +2288,7 @@ app.post("/api/analyze-document", async (req, res) => {
       console.log("[Analyze Document]: Processing for unauthenticated/guest session or refreshed token.");
     }
 
-    const ai = getGenAI();
+    const ai = getGenAI(clientApiKey);
     const systemInstruction = `You are an expert AI Document Specialist and OCR Parser supporting all industries (Manufacturing, Metals & Engineering, Chemicals, Pharmaceuticals, Textiles, Food & Beverages, Agriculture, FMCG, Electronics & Electricals, Hardware, Construction, Automotive, Logistics, Services, Packaging, etc.) for: ${businessName || "Enterprise"} (${industry || "General / Multi-Industry"}).
 Analyze the provided document (Purchase Order, Invoice, Quotation, Manifest, Delivery Challan, Packing List, or RFQ).
 
