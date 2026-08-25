@@ -161,9 +161,9 @@ function getInitialSeedLogs(): ApiUsageEntry[] {
   const actions: Array<{ type: ApiUsageEntry["actionType"]; label: string; pMin: number; pMax: number; cMin: number; cMax: number; model: string }> = [
     { type: "ocr_receipt_scan", label: "AI OCR Receipt Scan (50+ Items)", pMin: 3200, pMax: 7400, cMin: 1800, cMax: 4200, model: "gemini-3.7-flash" },
     { type: "smart_autofill", label: "Smart PO Extraction & Annexure", pMin: 2800, pMax: 5500, cMin: 1200, cMax: 2900, model: "gemini-3.7-flash" },
-    { type: "dimensional_qc", label: "Dimensional QC Analysis & Standards Check", pMin: 1500, pMax: 3200, cMin: 800, cMax: 1800, model: "gemini-3.1-flash-lite" },
-    { type: "voice_input", label: "Voice Order Transcription & Parsing", pMin: 850, pMax: 1900, cMin: 450, cMax: 950, model: "gemini-3.1-flash-lite" },
-    { type: "hsn_search", label: "Automated 8-Digit HSN Lookup", pMin: 400, pMax: 900, cMin: 150, cMax: 350, model: "gemini-3.1-flash-lite" },
+    { type: "dimensional_qc", label: "Dimensional QC Analysis & Standards Check", pMin: 1500, pMax: 3200, cMin: 800, cMax: 1800, model: "gemini-3.7-flash" },
+    { type: "voice_input", label: "Voice Order Transcription & Parsing", pMin: 850, pMax: 1900, cMin: 450, cMax: 950, model: "gemini-3.7-flash" },
+    { type: "hsn_search", label: "Automated 8-Digit HSN Lookup", pMin: 400, pMax: 900, cMin: 150, cMax: 350, model: "gemini-3.7-flash" },
   ];
 
   const logs: ApiUsageEntry[] = [];

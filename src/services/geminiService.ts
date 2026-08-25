@@ -634,7 +634,7 @@ Return JSON strictly adhering to:
           );
         }
 
-        const models = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+        const models = ["gemini-3.7-flash"];
         for (const model of models) {
           try {
             const response = await ai.models.generateContent({
