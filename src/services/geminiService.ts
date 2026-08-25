@@ -505,14 +505,23 @@ export async function analyzeDocument(
           result.products = sanitizeExtractedProducts(result.products);
         }
         return result;
+      } else {
+        let errMessage = "Document analysis failed on the server.";
+        try {
+          const errData = await res.json();
+          if (errData?.message) errMessage = errData.message;
+          else if (errData?.error) errMessage = errData.error;
+        } catch {
+          if (res.status === 413) errMessage = "Uploaded file is too large for the server. Please compress or split pages.";
+          else if (res.status === 429) errMessage = "AI rate limit reached. Please wait a moment and try again.";
+          else if (res.status === 503) errMessage = "AI service is currently busy. Please try again shortly.";
+        }
+        throw new Error(errMessage);
       }
-} catch (serverErr) {
-  console.error("[Document Analysis] Server API error:", serverErr);
-  throw serverErr;
-}
-
-
-    throw new Error("Document analysis could not be completed. Please ensure your backend server is running (`npm run dev`) or check your GEMINI_API_KEY.");
+    } catch (serverErr: any) {
+      console.error("[Document Analysis] Server API error:", serverErr);
+      throw serverErr;
+    }
   } catch (error) {
     console.error("Document analysis failed:", error);
     throw error;

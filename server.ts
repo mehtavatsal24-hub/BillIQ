@@ -192,7 +192,7 @@ async function dispatchEmail({
 }
 
 // Initialize Google GenAI on the secure server side
-const GEMINI_MODELS = ["gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-pro"];
 const GEMINI_MODEL = GEMINI_MODELS[0];
 
 // Server-side check before running Gemini
@@ -215,13 +215,13 @@ app.get("/api/health/gemini", (_req, res) => {
     return res.json({
       ok: true,
       geminiConfigured: true,
-      primaryModel: "gemini-3.7-flash",
+      primaryModel: GEMINI_MODELS[0],
     });
   } else {
     return res.status(500).json({
       ok: false,
       geminiConfigured: false,
-      primaryModel: "gemini-3.7-flash",
+      primaryModel: GEMINI_MODELS[0],
       error: "GEMINI_API_KEY_MISSING",
       message: "GEMINI_API_KEY environment variable is not configured on the production server.",
     });
@@ -231,7 +231,7 @@ app.get("/api/health/gemini", (_req, res) => {
 // Helper: callWithRetry with multi-model fallback and backoff for rate limits / transient errors
 async function callWithRetry<T>(
   fn: (activeModel: string) => Promise<T>,
-  retriesPerModel = 2,
+  retriesPerModel = 1,
   delay = 500
 ): Promise<T> {
   let lastError: any = null;
@@ -248,48 +248,21 @@ async function callWithRetry<T>(
         const errorMsg = typeof error === "string" ? error : (error?.message || JSON.stringify(error));
         const status = error?.status || error?.statusCode;
 
-        const isUnavailable =
-          status === 503 ||
-          errorMsg.includes("503") ||
-          errorMsg.includes("UNAVAILABLE") ||
-          errorMsg.includes("high demand") ||
-          errorMsg.includes("spikes in demand");
+        console.warn(`[Gemini API Warning] Model ${currentModel} failed (Attempt ${attempt + 1}/${retriesPerModel + 1}, status: ${status || 'N/A'}): ${errorMsg}`);
 
-        const isTransient =
-          isUnavailable ||
-          errorMsg.includes("429") ||
-          errorMsg.includes("500") ||
-          errorMsg.includes("502") ||
-          errorMsg.includes("504") ||
-          errorMsg.includes("RESOURCE_EXHAUSTED") ||
-          errorMsg.includes("overloaded") ||
-          errorMsg.includes("quota") ||
-          errorMsg.includes("rate limit") ||
-          status === 429 ||
-          status === 500;
-
-        // If high demand/503 or quota limit on current model and we have another model available, fall back immediately
-        if ((isUnavailable || status === 429 || errorMsg.includes("RESOURCE_EXHAUSTED")) && mIndex < GEMINI_MODELS.length - 1) {
-          console.log(`[Gemini API Model Switch] ${currentModel} encountered ${status || 'busy status'}. Immediately switching to ${GEMINI_MODELS[mIndex + 1]}...`);
-          break; // Switch to next model in GEMINI_MODELS
+        // If this model encountered an error and another model is available in fallback list, switch immediately
+        if (mIndex < GEMINI_MODELS.length - 1) {
+          console.log(`[Gemini API Model Switch] Switching from ${currentModel} to ${GEMINI_MODELS[mIndex + 1]}...`);
+          break; // Try next model in GEMINI_MODELS
         }
 
-        if (isTransient && attempt < retriesPerModel) {
+        if (attempt < retriesPerModel) {
           const jitter = Math.floor(Math.random() * 200);
           const waitTime = currentDelay + jitter;
-          console.log(`[Gemini API Retry Note] Model ${currentModel} busy (${status || 'transient'}). Retrying in ${waitTime}ms (Attempt ${attempt + 1}/${retriesPerModel})...`);
           await new Promise((resolve) => setTimeout(resolve, waitTime));
           currentDelay *= 1.5;
           continue;
         }
-
-        if (isTransient && mIndex < GEMINI_MODELS.length - 1) {
-          console.log(`[Gemini API Model Switch] ${currentModel} exhausted attempts. Switching to ${GEMINI_MODELS[mIndex + 1]}...`);
-          break; // Try next model in GEMINI_MODELS
-        }
-
-        console.error(`[Gemini API Final Failure] Model ${currentModel} failed. Status: ${status || 'N/A'}, Message: ${errorMsg}`);
-        throw error;
       }
     }
   }
